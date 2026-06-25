@@ -1,7 +1,7 @@
 """Pydantic schemas for API request/response validation."""
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, Field
 
 
 # === Auth ===
@@ -69,6 +69,7 @@ class ProjectResponse(BaseModel):
 
 # === Sprint ===
 class SprintImportRequest(BaseModel):
+    project_id: int
     sprint_name: str
 
 
@@ -84,6 +85,19 @@ class SprintResponse(BaseModel):
         from_attributes = True
 
 
+class SprintDetailResponse(SprintResponse):
+    """Sprint including project_id, dates, ticket list, and optional AI analysis data."""
+    project_id: int
+    jira_sprint_id: int
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    tickets: list["TicketDetailResponse"] = []
+    analysis_data: Optional[dict] = Field(
+        default=None,
+        description="AI 分析结果，包含 sprint_analysis 和 ticket_analyses",
+    )
+
+
 # === Ticket ===
 class TicketResponse(BaseModel):
     id: int
@@ -93,6 +107,21 @@ class TicketResponse(BaseModel):
     status: Optional[str] = None
     priority: Optional[str] = None
     assignee: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class TicketDetailResponse(TicketResponse):
+    """Detailed ticket with description, acceptance criteria, etc."""
+    sprint_id: int
+    description: Optional[str] = None
+    labels: Optional[list[str]] = None
+    story_points: Optional[int] = None
+    acceptance_criteria: Optional[list[str]] = None
+    comments: Optional[list[dict]] = None
+    figma_links: Optional[list[str]] = None
+    created_at: Optional[str] = None
 
     class Config:
         from_attributes = True

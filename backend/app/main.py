@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.v1 import auth, projects, sprints, reports
+from .api.v1 import auth, projects, sprints, reports, tickets, analysis
 
 app = FastAPI(
     title="ScopePilot API",
@@ -29,4 +29,6 @@ async def health():
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(projects.router, prefix="/api/v1/projects", tags=["projects"])
 app.include_router(sprints.router, prefix="/api/v1/sprints", tags=["sprints"])
+app.include_router(tickets.router, prefix="/api/v1/tickets", tags=["tickets"])
 app.include_router(reports.router, prefix="/api/v1/reports", tags=["reports"])
+app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["analysis"])
