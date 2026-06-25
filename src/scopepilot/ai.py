@@ -23,17 +23,21 @@ class AIProvider(ABC):
 
     def chat_json(self, system_prompt: str, user_prompt: str) -> dict:
         """Send a chat completion request and parse JSON response.
-        Uses JSON mode for structured output when supported."""
+        Falls back gracefully if provider does not support JSON mode."""
         # Try with JSON mode first (supported by OpenAI, Groq, etc.)
-        try:
-            response = self.chat(system_prompt, user_prompt, response_format={"type": "json_object"})
-            return self._parse_json(response)
-        except (AIError, json.JSONDecodeError):
-            pass
+        for attempt in range(2):
+            use_json_mode = (attempt == 0)
+            rf = {"type": "json_object"} if use_json_mode else None
+            try:
+                response = self.chat(system_prompt, user_prompt, response_format=rf)
+                if response and response.strip():
+                    return self._parse_json(response)
+            except Exception:
+                if not use_json_mode:
+                    raise  # Both attempts failed
+                continue  # JSON mode failed, try plain text
 
-        # Fallback: plain text with JSON extraction
-        response = self.chat(system_prompt, user_prompt)
-        return self._parse_json(response)
+        raise AIError("AI returned empty response")
 
     @staticmethod
     def _parse_json(text: str) -> dict:

@@ -59,18 +59,17 @@ SYSTEM_PROMPT_TICKET_BATCH = """你是资深后端 Tech Lead。请分析下面�
 - **输出必须是合法 JSON 数组**，元素对应各个 ticket。
 - 保持 JSON 数组顺序与输入一致。"""
 
-SYSTEM_PROMPT_SPRINT = """你是资深后端 Tech Lead。请分析整个 Sprint 的 tickets，输出结构化 JSON。
+SYSTEM_PROMPT_SPRINT = """You are a senior backend Tech Lead. Review the sprint summary table and produce a concise analysis.
 
-目标：
-1. 汇总迭代业务目标。
-2. 识别跨 ticket 依赖。
-3. 识别高风险 ticket。
-4. 推荐执行顺序。
-5. 生成 Sprint 级别的风险报告。
+Return ONLY valid JSON with this structure:
+{
+  "summary": "Sprint business goal summary in 2-3 sentences",
+  "risk_map": [{"ticket": "XXX-NNN", "level": "high/medium/low", "description": "..."}],
+  "suggested_execution_order": ["XXX-NNN", "XXX-NNN"],
+  "open_questions": ["..."]
+}
 
-限制：
-- 基于各个 ticket 的分析结果，不要编造不存在的信息。
-- 输出必须是合法 JSON。"""
+Do NOT include markdown, code fences, or extra text outside the JSON."""
 
 
 @dataclass
@@ -289,28 +288,35 @@ Please analyze this ticket and return the structured JSON result."""
     def analyze_sprint(self, sprint_name: str, ticket_analyses: list[TicketAnalysis]) -> SprintAnalysis:
         """Generate sprint-level analysis from individual ticket analyses.
         Uses a condensed summary to avoid prompt overflow with many tickets."""
-        # Build a condensed summary: for each ticket, only key fields
-        condensed = []
+        # Ultra-condensed: one line per ticket
+        lines = ["Ticket | Summary | Goal | Features | Risk | Effort"]
+        lines.append("-------|---------|------|----------|------|--------")
         for ta in ticket_analyses:
             d = ta.to_dict()
-            condensed.append({
-                "ticket_key": d["ticket_key"],
-                "summary": d["summary"],
-                "business_goal": d["business_goal"][:200],
-                "backend_features": d["backend_features"][:3],
-                "score": d.get("score", {}),
-                "open_questions": d["open_questions"][:3],
-            })
+            key = d["ticket_key"]
+            summary = d["summary"][:40]
+            goal = (d.get("business_goal") or "")[:60]
+            features = len(d.get("backend_features", []))
+            score = d.get("score", {})
+            risk = score.get("risk_level", "medium") if isinstance(score, dict) else "medium"
+            effort = score.get("estimated_effort", "?") if isinstance(score, dict) else "?"
+            lines.append(f"{key} | {summary} | {goal} | {features} fts | {risk} | {effort}")
 
-        analyses_json = json.dumps(condensed, ensure_ascii=False, indent=2)
+        table = "\n".join(lines)
 
         user_prompt = f"""## Sprint: {sprint_name}
 ## Total Tickets: {len(ticket_analyses)}
 
-## Ticket Analyses:
-{analyses_json}
+## Ticket Summary Table:
+{table}
 
-Please generate the sprint-level analysis (summary, risk map, execution order, open questions)."""
+Based on this table, generate:
+1. Sprint-level business goal summary
+2. Risk map (high/medium/low per ticket)
+3. Suggested execution order
+4. Open questions
+
+Return ONLY valid JSON."""
 
         try:
             result = self.provider.chat_json(SYSTEM_PROMPT_SPRINT, user_prompt)
