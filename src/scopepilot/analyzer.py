@@ -287,12 +287,22 @@ Please analyze this ticket and return the structured JSON result."""
         return all_results
 
     def analyze_sprint(self, sprint_name: str, ticket_analyses: list[TicketAnalysis]) -> SprintAnalysis:
-        """Generate sprint-level analysis from individual ticket analyses."""
-        analyses_json = json.dumps(
-            [t.to_dict() for t in ticket_analyses],
-            ensure_ascii=False,
-            indent=2,
-        )
+        """Generate sprint-level analysis from individual ticket analyses.
+        Uses a condensed summary to avoid prompt overflow with many tickets."""
+        # Build a condensed summary: for each ticket, only key fields
+        condensed = []
+        for ta in ticket_analyses:
+            d = ta.to_dict()
+            condensed.append({
+                "ticket_key": d["ticket_key"],
+                "summary": d["summary"],
+                "business_goal": d["business_goal"][:200],
+                "backend_features": d["backend_features"][:3],
+                "score": d.get("score", {}),
+                "open_questions": d["open_questions"][:3],
+            })
+
+        analyses_json = json.dumps(condensed, ensure_ascii=False, indent=2)
 
         user_prompt = f"""## Sprint: {sprint_name}
 ## Total Tickets: {len(ticket_analyses)}
