@@ -28,22 +28,71 @@ class AIProvider(ABC):
 
     @staticmethod
     def _parse_json(text: str) -> dict:
-        """Parse JSON from LLM response, handling markdown code fences."""
+        """Parse JSON from LLM response, handling markdown code fences and common LLM JSON issues."""
+        if not text or not text.strip():
+            raise json.JSONDecodeError("Empty response", "", 0)
+
         text = text.strip()
+
         # Remove markdown code fences if present
         if text.startswith("```"):
             lines = text.split("\n")
-            fence_char = lines[0].strip()
-            if fence_char.startswith("```"):
-                # Find end fence
+            first_line = lines[0].strip()
+            if first_line.startswith("```"):
+                end_fence = None
                 for i, line in enumerate(lines[1:], 1):
                     if line.strip() == "```":
-                        text = "\n".join(lines[1:i])
+                        end_fence = i
                         break
+                if end_fence:
+                    text = "\n".join(lines[1:end_fence])
                 else:
-                    # No end fence found
                     text = "\n".join(lines[1:])
-        return json.loads(text)
+                text = text.strip()
+
+        # Try standard parse first
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Try with strict=False (allows control characters)
+        try:
+            return json.loads(text, strict=False)
+        except json.JSONDecodeError:
+            pass
+
+        # Try common fixes for LLM-generated JSON
+        fixed = text
+        # 1. Escape unescaped newlines inside strings (newlines not preceded by backslash)
+        # 2. Try to find the last complete JSON object/array
+        for attempt in range(3):
+            try:
+                return json.loads(fixed, strict=False)
+            except json.JSONDecodeError as e:
+                pos = e.pos if hasattr(e, 'pos') else 0
+                if pos <= 0:
+                    # Try wrapping in array or extracting partial JSON
+                    break
+                # Truncate at the error position and try again
+                fixed = fixed[:pos].rstrip()
+                # Remove trailing comma if present
+                if fixed.rstrip().endswith(","):
+                    fixed = fixed.rstrip()[:-1].rstrip()
+                # Close unclosed braces/brackets
+                opens = fixed.count("{") - fixed.count("}")
+                if opens > 0:
+                    fixed += "}" * opens
+                opens_bracket = fixed.count("[") - fixed.count("]")
+                if opens_bracket > 0:
+                    fixed += "]" * opens_bracket
+
+        # Final fallback: return error dict
+        raise json.JSONDecodeError(
+            f"Failed to parse AI response after fixes: {text[:200]}",
+            text,
+            0,
+        )
 
 
 class OpenAILikeProvider(AIProvider):

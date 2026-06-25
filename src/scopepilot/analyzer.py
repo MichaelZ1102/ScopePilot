@@ -10,20 +10,38 @@ from .ai import AIProvider, create_provider
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT_TICKET = """你是资深后端 Tech Lead。请分析下面的 Jira ticket，输出结构化 JSON。
+SYSTEM_PROMPT_TICKET = """You are a senior backend Tech Lead analyzing a Jira ticket.
 
-目标：
-1. 总结业务目标。
-2. 拆解 Acceptance Criteria。
-3. 识别后端功能点。
-4. 判断是否涉及 API、DB、权限、状态流、校验逻辑、外部依赖。
-5. 找出需求不清晰的问题。
-6. 给出复杂度和风险评分。
+Output ONLY valid JSON — no markdown, no code fences, no extra text.
+Use \" \" to quote strings, escape inner quotes with backslash.
 
-限制：
-- 不要编造 ticket 中不存在的业务规则。
-- 如果信息不足，放入 open_questions。
-- 输出必须是合法 JSON。"""
+Required JSON structure:
+{
+  "business_goal": "...",
+  "acceptance_criteria_summary": "...",
+  "backend_features": ["..."],
+  "api_candidates": ["GET /api/..."],
+  "db_changes": ["..."],
+  "permission_rules": ["..."],
+  "state_transitions": ["..."],
+  "validation_rules": ["..."],
+  "external_dependencies": ["..."],
+  "open_questions": ["..."],
+  "score": {
+    "business_complexity": 1-10,
+    "technical_complexity": 1-10,
+    "overall": 1-10,
+    "estimated_effort": "..."
+  },
+  "code_impact": {
+    "likely_modules": ["..."],
+    "confidence": "low/medium/high"
+  },
+  "implementation_plan": ["step 1", "step 2"],
+  "api_tests": [
+    {"name": "...", "method": "GET", "path": "/api/...", "expected_status": 200, "assertions": ["..."]}
+  ]
+}"""
 
 SYSTEM_PROMPT_TICKET_BATCH = """你是资深后端 Tech Lead。请分析下面的多个 Jira tickets，**对每个 ticket 分别输出结构化 JSON，放在一个 JSON 数组中**。
 
