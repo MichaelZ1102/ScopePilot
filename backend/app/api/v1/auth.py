@@ -59,8 +59,8 @@ async def register(req: RegisterRequest):
         raise HTTPException(status_code=400, detail="Email already registered")
 
     ws = _get_or_create_default_workspace()
+    global _next_id, _next_ws_id
     user_id = _next_id
-    global _next_id
     _next_id += 1
 
     user = {
