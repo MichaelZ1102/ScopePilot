@@ -1,9 +1,11 @@
 """Application configuration."""
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(extra="ignore")
+
     app_name: str = "ScopePilot"
     debug: bool = True
     database_url: str = "postgresql+asyncpg://localhost:5432/scopepilot"
@@ -15,10 +17,6 @@ class Settings(BaseSettings):
     jira_url: Optional[str] = None
     jira_email: Optional[str] = None
     jira_api_token: Optional[str] = None
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 settings = Settings()
