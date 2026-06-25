@@ -1,0 +1,2 @@
+JIRA_URL=https://lessen.atlassian.net
+JIRA_EMAIL=michael.zheng@simpletruss.com
