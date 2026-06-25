@@ -146,7 +146,7 @@ def analyze(
         )
     console.print(table)
 
-    # --- Step 5: AI Analysis (batched) ---
+    # --- Step 5: AI Analysis ---
     try:
         pipeline = AnalysisPipeline()
     except AIError as e:
@@ -157,17 +157,38 @@ def analyze(
         console.print("  OPENAI_API_KEY=your-key")
         raise typer.Exit(1)
 
-    console.print(f"\n[bold]🤖 Running AI analysis on {len(tickets_data)} tickets (batched)...[/bold]")
+    # Only analyze tickets that have content (description or comments)
+    content_tickets = [td for td in tickets_data if td.get("description", "").strip() or td.get("comments")]
+    empty_tickets = [td for td in tickets_data if not td.get("description", "").strip() and not td.get("comments")]
 
-    try:
-        # Batch size 5 reduces API calls from 43 to ~9
-        ticket_analyses = pipeline.analyze_tickets_batch(tickets_data, batch_size=5)
-    except Exception as e:
-        console.print(f"\n[yellow]⚠️ Batch analysis warning: {e}[/yellow]")
-        ticket_analyses = []
+    console.print(f"\n[bold]🤖 Analyzing {len(content_tickets)}/{len(tickets_data)} tickets with content...[/bold]")
+    if empty_tickets:
+        console.print(f"  [dim]Skipping {len(empty_tickets)} tickets without description or comments[/dim]")
 
-    completed = sum(1 for ta in ticket_analyses if ta and not ta.open_questions)
-    console.print(f"[green]✅ Analysis complete: {completed}/{len(tickets_data)} tickets[/green]")
+    ticket_analyses = []
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task3 = progress.add_task("[yellow]🤖 Running AI analysis...", total=len(content_tickets))
+
+        for td in content_tickets:
+            progress.update(task3, description=f"[yellow]🤖 Analyzing {td['key']}...")
+            try:
+                analysis = pipeline.analyze_ticket(td)
+                ticket_analyses.append(analysis)
+            except Exception as e:
+                console.print(f"\n  [red]⚠️ {td['key']} analysis failed: {e}[/red]")
+                ticket_analyses.append(None)
+            progress.update(task3, advance=1)
+
+        progress.update(task3, completed=True, description=f"[green]✅ Analysis complete[/green]")
+
+    # Filter out failed analyses and add empty placeholder for skipped tickets
+    ticket_analyses = [ta for ta in ticket_analyses if ta is not None]
+    completed = len(ticket_analyses)
+    console.print(f"[green]✅ Analyzed {completed} tickets[/green]")
 
     # --- Step 6: Sprint-level analysis ---
     with Progress(

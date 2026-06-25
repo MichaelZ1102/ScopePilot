@@ -43,6 +43,17 @@ def generate_ticket_report(ticket: TicketAnalysis, language: str = "zh-CN") -> s
             "",
         ]
 
+        # Comments section (always show, from raw Jira data)
+        if ticket.comments:
+            lines += ["", "## 💬 留言", ""]
+            for c in ticket.comments[:10]:
+                author = c.get("author", "Unknown")
+                body = c.get("body", "")
+                created = c.get("created", "")[:10]
+                lines.append(f"> **{author}** ({created}): {body[:500]}")
+                lines.append("")
+            lines.append("")
+
         if ticket.business_goal:
             lines += [
                 "## 🎯 业务目标",

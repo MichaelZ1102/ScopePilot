@@ -132,7 +132,7 @@ class JiraClient:
                 "search/jql",
                 params={
                     "jql": f"Sprint = {sprint_id} ORDER BY priority DESC, created ASC",
-                    "fields": "summary,description,status,assignee,priority,issuetype,labels,attachment,duedate,updated,customfield_10016",
+                    "fields": "summary,description,status,assignee,priority,issuetype,labels,attachment,comment,duedate,updated,customfield_10016",
                     "expand": "renderedFields",
                     "startAt": start_at,
                     "maxResults": max_results,
@@ -218,12 +218,29 @@ class JiraClient:
         # Figma links
         figma_links = self._extract_figma_links(desc_text)
 
+        # Extract comments
+        comments_list = []
+        comment_field = fields.get("comment", {})
+        if isinstance(comment_field, dict):
+            for c in comment_field.get("comments", []):
+                author = c.get("author", {}).get("displayName", "Unknown")
+                body = c.get("body", "")
+                # Body can be A+D format too
+                if isinstance(body, dict):
+                    body = self._adf_to_text(body)
+                comments_list.append({
+                    "author": author,
+                    "body": body[:500],
+                    "created": c.get("created", ""),
+                })
+
         return {
             "key": key,
             "summary": fields.get("summary", ""),
             "description": desc_text,
             "acceptance_criteria": acceptance_criteria,
             "figma_links": figma_links,
+            "comments": comments_list,
             "status": fields.get("status", {}).get("name", ""),
             "assignee": fields.get("assignee", {}).get("displayName", "Unassigned"),
             "priority": fields.get("priority", {}).get("name", "Medium"),

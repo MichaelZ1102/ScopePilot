@@ -74,6 +74,7 @@ class TicketAnalysis:
     code_impact: dict = None
     implementation_plan: list = None
     api_tests: list = None
+    comments: list = None
 
     def to_dict(self) -> dict:
         return {
@@ -93,6 +94,7 @@ class TicketAnalysis:
             "code_impact": self.code_impact or {},
             "implementation_plan": self.implementation_plan or [],
             "api_tests": self.api_tests or [],
+            "comments": self.comments or [],
         }
 
 
@@ -119,7 +121,7 @@ class SprintAnalysis:
         }
 
 
-def _parse_ticket_result(ticket_key: str, summary: str, result: dict) -> TicketAnalysis:
+def _parse_ticket_result(ticket_key: str, summary: str, result: dict, comments: list = None) -> TicketAnalysis:
     """Parse a single AI result dict into TicketAnalysis."""
     return TicketAnalysis(
         ticket_key=ticket_key,
@@ -138,6 +140,7 @@ def _parse_ticket_result(ticket_key: str, summary: str, result: dict) -> TicketA
         code_impact=result.get("code_impact", {}),
         implementation_plan=result.get("implementation_plan", []),
         api_tests=result.get("api_tests", []),
+        comments=comments or [],
     )
 
 
@@ -153,8 +156,17 @@ class AnalysisPipeline:
         summary = ticket_data["summary"]
         description = ticket_data.get("description", "")
         acceptance_criteria = ticket_data.get("acceptance_criteria", [])
+        comments = ticket_data.get("comments", [])
 
         ac_text = "\n".join(f"- {ac}" for ac in acceptance_criteria[:20]) if acceptance_criteria else "No explicit AC provided."
+
+        # Include comments as context
+        comments_text = ""
+        if comments:
+            parts = []
+            for c in comments[:8]:  # limit to 8 most recent
+                parts.append(f"[{c['author']}]: {c['body'][:300]}")
+            comments_text = "\n".join(parts) if parts else ""
 
         user_prompt = f"""## Ticket: {ticket_key}
 ## Summary: {summary}
@@ -164,11 +176,14 @@ class AnalysisPipeline:
 ## Acceptance Criteria:
 {ac_text}
 
+## Comments:
+{comments_text if comments_text else "No comments available."}
+
 Please analyze this ticket and return the structured JSON result."""
 
         try:
             result = self.provider.chat_json(SYSTEM_PROMPT_TICKET, user_prompt)
-            return _parse_ticket_result(ticket_key, summary, result)
+            return _parse_ticket_result(ticket_key, summary, result, comments)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse AI response for {ticket_key}: {e}")
             return TicketAnalysis(
