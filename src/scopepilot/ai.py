@@ -22,7 +22,16 @@ class AIProvider(ABC):
         ...
 
     def chat_json(self, system_prompt: str, user_prompt: str) -> dict:
-        """Send a chat completion request and parse JSON response."""
+        """Send a chat completion request and parse JSON response.
+        Uses JSON mode for structured output when supported."""
+        # Try with JSON mode first (supported by OpenAI, Groq, etc.)
+        try:
+            response = self.chat(system_prompt, user_prompt, response_format={"type": "json_object"})
+            return self._parse_json(response)
+        except (AIError, json.JSONDecodeError):
+            pass
+
+        # Fallback: plain text with JSON extraction
         response = self.chat(system_prompt, user_prompt)
         return self._parse_json(response)
 
