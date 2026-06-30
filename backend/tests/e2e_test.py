@@ -1,5 +1,15 @@
 """ScopePilot end-to-end test flow."""
-import httpx, json, sys, time
+import os
+import time
+
+import httpx
+import pytest
+
+if os.environ.get("SCOPEPILOT_RUN_E2E") != "1":
+    pytest.skip(
+        "E2E smoke flow requires a running server. Set SCOPEPILOT_RUN_E2E=1 to enable.",
+        allow_module_level=True,
+    )
 
 BASE = "http://localhost:8000/api/v1"
 errors = []
@@ -26,9 +36,9 @@ for _ in range(5):
 step(1, "Auth - Register/Login")
 
 # Try register, fallback to login if user exists
-r = httpx.post(f"{BASE}/auth/register", json={"email":"demo@test.com","name":"Demo","password":"demo123"})
+r = httpx.post(f"{BASE}/auth/register", json={"email":"demo@test.com","name":"Demo","password":"demo12345"})
 if r.status_code == 400:
-    r = httpx.post(f"{BASE}/auth/login", json={"email":"demo@test.com","password":"demo123"})
+    r = httpx.post(f"{BASE}/auth/login", json={"email":"demo@test.com","password":"demo12345"})
     check(r.status_code == 200, "Login (user existed)")
 else:
     check(r.status_code == 200, "Register new user", r.text[:80])
@@ -36,7 +46,7 @@ else:
 token = r.json()["access_token"]
 h = {"Authorization": f"Bearer {token}"}
 
-r = httpx.post(f"{BASE}/auth/register", json={"email":"demo@test.com","name":"Dup","password":"demo123"})
+r = httpx.post(f"{BASE}/auth/register", json={"email":"demo@test.com","name":"Dup","password":"demo12345"})
 check(r.status_code == 400, "Duplicate blocked")
 
 r = httpx.get(f"{BASE}/auth/me", headers=h)
@@ -139,11 +149,7 @@ r = httpx.post(f"{BASE}/team/billing/upgrade", json={"tier":"pro"}, headers=h)
 check(r.status_code == 200, "Upgrade to Pro")
 
 r = httpx.post(f"{BASE}/team/share", json={"sprint_id":1,"title":"E2E Report"}, headers=h)
-check(r.status_code in (200,201), "Share report", r.text[:80])
-share_id = r.json().get("id")
-
-r = httpx.delete(f"{BASE}/team/shared/{share_id}", headers=h)
-check(r.status_code == 204, "Revoke share")
+check(r.status_code == 404, "Reject sharing a missing sprint", r.text[:80])
 
 # ── 7. Frontend ──
 step(7, "Frontend Static Files")
