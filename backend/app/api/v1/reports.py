@@ -3,12 +3,14 @@
 Generate and export AI analysis reports as Markdown documents.
 All endpoints require a valid Bearer token with workspace access.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Annotated, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import Response
 
 from ...services import get_current_user
 from ...services.jira import JiraService
-from ..v1.projects import _projects
+from ..v1.projects import ProjectStore
 from scopepilot.analyzer import SprintAnalysis, TicketAnalysis
 from scopepilot.report import generate_sprint_report, generate_ticket_report
 
@@ -35,7 +37,7 @@ def _build_report(sprint_id: int, token_data: dict) -> str:
     if sprint is None:
         raise HTTPException(status_code=404, detail="Sprint not found")
 
-    project = _projects.get(sprint["project_id"])
+    project = ProjectStore.get(sprint["project_id"])
     if project is None or project["workspace_id"] != token_data.get("workspace_id"):
         raise HTTPException(status_code=404, detail="Sprint not found")
 
@@ -78,7 +80,7 @@ def _build_report(sprint_id: int, token_data: dict) -> str:
 
 @router.get("/{sprint_id}/overview")
 async def get_sprint_overview(
-    sprint_id: int,
+    sprint_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Get Sprint overview report as Markdown.
@@ -93,9 +95,9 @@ async def get_sprint_overview(
 
 @router.get("/{sprint_id}/export")
 async def export_report(
-    sprint_id: int,
+    sprint_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
-    fmt: str = "md",
+    fmt: Annotated[Literal["md", "pdf"], Query()] = "md",
 ):
     """Export the sprint report.
 

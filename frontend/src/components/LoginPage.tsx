@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { login, register } from '../lib/api'
+import { getApiErrorMessage } from '../lib/client'
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
@@ -106,11 +107,7 @@ export default function LoginPage() {
       // Token is set as HttpOnly cookie by the server — no localStorage needed
       navigate('/')
     } catch (err: unknown) {
-      const msg =
-        err && typeof err === 'object' && 'response' in err
-          ? ((err as { response: { data: { detail: string } } }).response?.data?.detail ?? t('login.error_default'))
-          : t('login.error_network')
-      setError(msg)
+      setError(getApiErrorMessage(err, t('login.error_network')))
     } finally {
       setLoading(false)
     }

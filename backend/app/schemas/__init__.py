@@ -1,13 +1,16 @@
 """Pydantic schemas for API request/response validation."""
 from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Literal, Optional
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 
 # === Auth ===
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(pattern=EMAIL_PATTERN, max_length=254)
+    password: str = Field(min_length=1, max_length=256)
 
 
 class TokenResponse(BaseModel):
@@ -17,7 +20,7 @@ class TokenResponse(BaseModel):
 
 # === Workspace ===
 class WorkspaceCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=100)
 
 
 class WorkspaceResponse(BaseModel):
@@ -30,10 +33,10 @@ class WorkspaceResponse(BaseModel):
 
 # === User ===
 class UserCreate(BaseModel):
-    email: str
-    name: str
-    password: str
-    role: str = "member"
+    email: str = Field(pattern=EMAIL_PATTERN, max_length=254)
+    name: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=8, max_length=256)
+    role: Literal["admin", "member", "viewer"] = "member"
 
 
 class UserResponse(BaseModel):
@@ -47,11 +50,16 @@ class UserResponse(BaseModel):
 
 # === Project ===
 class ProjectCreate(BaseModel):
-    name: str
-    jira_url: str
-    jira_email: str
-    jira_api_token: str
-    jira_project_key: str
+    name: str = Field(min_length=1, max_length=120)
+    jira_url: str = Field(pattern=r"^https?://", max_length=500)
+    jira_email: str = Field(pattern=EMAIL_PATTERN, max_length=254)
+    jira_api_token: str = Field(min_length=1, max_length=4096)
+    jira_project_key: str = Field(min_length=1, max_length=50)
+
+    @field_validator("jira_url")
+    @classmethod
+    def _strip_jira_url(cls, value: str) -> str:
+        return value.strip().rstrip("/")
 
 
 class ProjectResponse(BaseModel):
@@ -65,17 +73,22 @@ class ProjectResponse(BaseModel):
 
 
 class ProjectUpdate(BaseModel):
-    name: Optional[str] = None
-    jira_url: Optional[str] = None
-    jira_email: Optional[str] = None
-    jira_api_token: Optional[str] = None
-    jira_project_key: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    jira_url: Optional[str] = Field(default=None, pattern=r"^https?://", max_length=500)
+    jira_email: Optional[str] = Field(default=None, pattern=EMAIL_PATTERN, max_length=254)
+    jira_api_token: Optional[str] = Field(default=None, min_length=1, max_length=4096)
+    jira_project_key: Optional[str] = Field(default=None, min_length=1, max_length=50)
+
+    @field_validator("jira_url")
+    @classmethod
+    def _strip_optional_jira_url(cls, value: Optional[str]) -> Optional[str]:
+        return value.strip().rstrip("/") if value else value
 
 
 # === Sprint ===
 class SprintImportRequest(BaseModel):
-    project_id: int
-    sprint_name: str
+    project_id: int = Field(gt=0)
+    sprint_name: str = Field(min_length=1, max_length=200)
 
 
 class SprintResponse(BaseModel):
@@ -131,11 +144,11 @@ class TicketDetailResponse(TicketResponse):
 
 # === Code Source ===
 class CodeSourceCreate(BaseModel):
-    name: str
-    provider: str = "github"  # github, gitlab, bitbucket, local
-    repo_url: str
-    default_branch: str = "main"
-    access_token: str = ""
+    name: str = Field(min_length=1, max_length=120)
+    provider: Literal["github", "gitlab", "bitbucket", "local"] = "github"
+    repo_url: str = Field(min_length=1, max_length=1000)
+    default_branch: str = Field(default="main", min_length=1, max_length=120)
+    access_token: str = Field(default="", max_length=4096)
 
 
 class CodeSourceResponse(BaseModel):

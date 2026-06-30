@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { AuthProvider, useAuth } from './lib/AuthContext'
+import { useAuth } from './lib/AuthContext'
 import Layout from './components/Layout'
 import LoginPage from './components/LoginPage'
 import Dashboard from './pages/Dashboard'
@@ -10,11 +10,12 @@ import Settings from './pages/Settings'
 import CodeSources from './pages/CodeSources'
 import ApiTestPlans from './pages/ApiTestPlans'
 import FigmaDesigns from './pages/FigmaDesigns'
+import SharedReportPage from './pages/SharedReportPage'
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const { isLoggedIn, isLoading } = useAuth()
 
-  if (isLoading) return <div style={{display:'flex',justifyContent:'center',alignItems:'center',height:'100vh',color:'#888'}}>验证中...</div>
+  if (isLoading) return <div style={{display:'flex',justifyContent:'center',alignItems:'center',height:'100vh',color:'#888'}}>Checking session...</div>
   if (!isLoggedIn) return <Navigate to="/login" replace />
   return <>{children}</>
 }
@@ -27,6 +28,7 @@ function AppContent() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/shared/:token" element={<SharedReportPage />} />
       <Route
         element={
           <ProtectedRoute>
@@ -48,11 +50,7 @@ function AppContent() {
 }
 
 function App() {
-  return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
-  )
+  return <AppContent />
 }
 
 export default App

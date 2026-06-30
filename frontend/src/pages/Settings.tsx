@@ -6,6 +6,7 @@ import {
   listSharedReports, shareReport, revokeShare,
   type BillingTier, type UsageData, type TeamMember, type SharedReport,
 } from '../lib/api'
+import { getApiErrorMessage } from '../lib/client'
 
 const styles: any = {
   page: { maxWidth: 900, margin: '0 auto' },
@@ -74,7 +75,7 @@ export default function Settings() {
 
   async function handleUpgrade(tier: string) {
     try { await upgradeTier(tier); await loadData(); alert('升级成功！') }
-    catch (err: any) { alert(err?.response?.data?.detail || '升级失败') }
+    catch (err: unknown) { alert(getApiErrorMessage(err, 'Upgrade failed')) }
   }
 
   async function handleInvite() {
@@ -82,7 +83,7 @@ export default function Settings() {
       await addMember(inviteForm.email, inviteForm.name, inviteForm.role)
       setShowInvite(false); setInviteForm({ email: '', name: '', role: 'member' })
       await loadData()
-    } catch (err: any) { alert(err?.response?.data?.detail || '邀请失败') }
+    } catch (err: unknown) { alert(getApiErrorMessage(err, 'Invite failed')) }
   }
 
   async function handleRemoveMember(id: number) {
@@ -95,7 +96,7 @@ export default function Settings() {
       await shareReport(Number(shareForm.sprint_id), shareForm.title, shareForm.password)
       setShowShare(false); setShareForm({ sprint_id: '', title: '', password: '' })
       await loadData()
-    } catch (err: any) { alert(err?.response?.data?.detail || '分享失败') }
+    } catch (err: unknown) { alert(getApiErrorMessage(err, 'Share failed')) }
   }
 
   async function handleRevoke(id: number) {

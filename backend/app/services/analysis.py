@@ -4,13 +4,21 @@
 支持触发式 Sprint 分析和查询已有分析结果。
 """
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from ..adapters import create_analysis_pipeline
+from ..database import SqliteStore
 
 from .jira import JiraService, _sprints
 
 logger = logging.getLogger(__name__)
+
+
+class AnalysisJobStore(SqliteStore):
+    _entity_name = "analysis_jobs"
+    _store: dict[int, dict] = {}
+    _next_id: int = 1
 
 
 class AnalysisServiceError(Exception):
@@ -19,6 +27,33 @@ class AnalysisServiceError(Exception):
 
 class AnalysisService:
     """AI 分析服务，对 Sprint 内的所有 Ticket 执行批量分析和 Sprint 摘要生成。"""
+
+    @staticmethod
+    async def create_job(sprint_id: int, workspace_id: int) -> dict:
+        now = datetime.now(timezone.utc).isoformat()
+        job = {
+            "id": AnalysisJobStore._persist_next_id(),
+            "sprint_id": sprint_id,
+            "workspace_id": workspace_id,
+            "status": "queued",
+            "error_message": "",
+            "created_at": now,
+            "started_at": None,
+            "finished_at": None,
+        }
+        return await AnalysisJobStore._persist_add(job)
+
+    @staticmethod
+    async def update_job(job_id: int, status: str, error_message: str = "") -> None:
+        updates = {"status": status}
+        now = datetime.now(timezone.utc).isoformat()
+        if status == "running":
+            updates["started_at"] = now
+        if status in {"done", "failed"}:
+            updates["finished_at"] = now
+        if error_message:
+            updates["error_message"] = error_message[:2000]
+        await AnalysisJobStore.update_fields(job_id, updates)
 
     @staticmethod
     async def analyze_sprint(sprint_id: int) -> dict:

@@ -1,6 +1,6 @@
 """Codebase routes: manage code sources, scan repos, and analyze code impact."""
-from fastapi import APIRouter, Depends, HTTPException
-from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from typing import Annotated, Optional
 
 from ...schemas import (
     CodeSourceCreate, CodeSourceResponse, CodeSourceDetailResponse,
@@ -34,7 +34,7 @@ async def create_source(
 
 @router.get("/{source_id}", response_model=CodeSourceDetailResponse)
 async def get_source(
-    source_id: int,
+    source_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Get details of a specific code source."""
@@ -46,7 +46,7 @@ async def get_source(
 
 @router.delete("/{source_id}", status_code=204)
 async def delete_source(
-    source_id: int,
+    source_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Delete a code source and its related data."""
@@ -56,7 +56,7 @@ async def delete_source(
 
 @router.post("/{source_id}/scan", response_model=RepoSnapshotResponse)
 async def scan_repository(
-    source_id: int,
+    source_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Trigger a scan of the repository."""
@@ -71,7 +71,7 @@ async def scan_repository(
 
 @router.get("/{source_id}/snapshot", response_model=Optional[RepoSnapshotResponse])
 async def get_latest_snapshot(
-    source_id: int,
+    source_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Get the latest repository snapshot."""
@@ -88,9 +88,9 @@ async def get_latest_snapshot(
 
 @router.post("/{source_id}/impact/{ticket_id}", response_model=CodeImpactResponse)
 async def analyze_code_impact(
-    source_id: int,
-    ticket_id: int,
-    sprint_id: int,
+    source_id: Annotated[int, Path(gt=0)],
+    ticket_id: Annotated[int, Path(gt=0)],
+    sprint_id: Annotated[int, Query(gt=0)],
     token_data: dict = Depends(get_current_user),
     summary: str = "",
     description: str = "",
@@ -116,7 +116,7 @@ async def analyze_code_impact(
 
 @router.get("/impact/sprint/{sprint_id}", response_model=list[CodeImpactResponse])
 async def list_sprint_impacts(
-    sprint_id: int,
+    sprint_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """List all code impact analyses for a sprint."""
@@ -127,7 +127,7 @@ async def list_sprint_impacts(
 
 @router.get("/impact/ticket/{ticket_id}", response_model=Optional[CodeImpactResponse])
 async def get_ticket_impact(
-    ticket_id: int,
+    ticket_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Get code impact for a specific ticket."""

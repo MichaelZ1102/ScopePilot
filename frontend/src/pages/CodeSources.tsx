@@ -4,6 +4,7 @@ import {
   listCodeSources, createCodeSource, deleteCodeSource, scanRepository, getLatestSnapshot,
   type CodeSource, type RepoSnapshot,
 } from '../lib/api'
+import { getApiErrorMessage } from '../lib/client'
 
 const styles: any = {
   page: { maxWidth: 1000, margin: '0 auto' },
@@ -82,8 +83,8 @@ export default function CodeSources() {
       const snapshot = await scanRepository(id)
       setSnapshots((prev) => ({ ...prev, [id]: snapshot }))
       await loadSources()
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || '扫描失败')
+    } catch (err: unknown) {
+      alert(getApiErrorMessage(err, 'Scan failed'))
     }
   }
 

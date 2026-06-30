@@ -8,6 +8,7 @@ export async function getBilling() { const r = await api.get('/team/billing'); r
 export async function upgradeTier(tier: string) { const r = await api.post('/team/billing/upgrade', { tier }); return r.data }
 export async function getUsage() { const r = await api.get('/team/usage'); return r.data }
 export async function listTiers() { const r = await api.get('/team/tiers'); return r.data }
-export async function shareReport(sprintId: number, title: string, password?: string) { const r = await api.post('/team/reports/share', { sprint_id: sprintId, title, password: password || '' }); return r.data }
-export async function listSharedReports() { const r = await api.get('/team/reports/shared'); return r.data }
-export async function revokeShare(shareId: number) { await api.post(`/team/reports/${shareId}/revoke`) }
+export async function shareReport(sprintId: number, title: string, password?: string) { const r = await api.post('/team/share', { sprint_id: sprintId, title, password: password || '' }); return r.data }
+export async function listSharedReports() { const r = await api.get('/team/shared'); return r.data }
+export async function accessSharedReport(token: string, password?: string) { const r = await api.post(`/team/shared/access/${token}`, { password: password || '' }); return r.data }
+export async function revokeShare(shareId: number) { await api.delete(`/team/shared/${shareId}`) }

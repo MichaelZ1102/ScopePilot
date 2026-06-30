@@ -9,6 +9,7 @@ from typing import Optional
 
 import httpx
 from ..database import SqliteStore
+from ..encryption import decrypt, encrypt
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,21 @@ class CodebaseError(Exception):
 class CodebaseService:
     """Service for managing code sources, scanning repos, and predicting code impact."""
 
+    @staticmethod
+    def _read_access_token(token: str) -> tuple[str, bool]:
+        if not token:
+            return "", False
+        try:
+            return decrypt(token), False
+        except Exception:
+            if token.startswith("gAAAA"):
+                raise CodebaseError("Stored access token cannot be decrypted. Please re-enter the token.")
+            return token, True
+
+    @staticmethod
+    def _without_secrets(source: dict) -> dict:
+        return {key: value for key, value in source.items() if key != "access_token"}
+
     # ── Code Source CRUD ──────────────────────────────────────────────────
 
     @classmethod
@@ -56,7 +72,7 @@ class CodebaseService:
             "provider": data.get("provider", "github"),
             "repo_url": data["repo_url"],
             "default_branch": data.get("default_branch", "main"),
-            "access_token": data.get("access_token", ""),
+            "access_token": encrypt(data.get("access_token", "")),
             "webhook_secret": None,
             "last_scanned_at": None,
             "scan_status": "pending",
@@ -67,11 +83,14 @@ class CodebaseService:
 
     @classmethod
     def list_sources(cls, workspace_id: int) -> list[dict]:
-        return [s for s in _code_sources.values() if s["workspace_id"] == workspace_id]
+        return [
+            cls._without_secrets(s) for s in CodeSourceStore.list_by("workspace_id", workspace_id)
+            if s["workspace_id"] == workspace_id
+        ]
 
     @classmethod
     def get_source(cls, source_id: int, workspace_id: int) -> Optional[dict]:
-        source = _code_sources.get(source_id)
+        source = CodeSourceStore.get(source_id)
         if source and source["workspace_id"] == workspace_id:
             return source
         return None
@@ -82,12 +101,10 @@ class CodebaseService:
         if source:
             await CodeSourceStore._persist_delete(source_id)
             # Clean up related snapshots and impacts
-            for sid in list(_repo_snapshots.keys()):
-                if _repo_snapshots[sid]["code_source_id"] == source_id:
-                    await RepoSnapshotStore._persist_delete(sid)
-            for iid in list(_code_impacts.keys()):
-                if _code_impacts[iid]["code_source_id"] == source_id:
-                    await CodeImpactStore._persist_delete(iid)
+            for snapshot in RepoSnapshotStore.list_by("code_source_id", source_id):
+                await RepoSnapshotStore._persist_delete(snapshot["id"])
+            for impact in CodeImpactStore.list_by("code_source_id", source_id):
+                await CodeImpactStore._persist_delete(impact["id"])
             return True
         return False
 
@@ -101,7 +118,7 @@ class CodebaseService:
             raise CodebaseError("Code source not found")
 
         source["scan_status"] = "scanning"
-        await CodeSourceStore._persist_update(source_id, {"scan_status": "scanning"})
+        await CodeSourceStore.update_fields(source_id, {"scan_status": "scanning"})
 
         try:
             if source["provider"] == "github":
@@ -115,13 +132,13 @@ class CodebaseService:
 
             source["last_scanned_at"] = snapshot["scanned_at"]
             source["scan_status"] = "done"
-            await CodeSourceStore._persist_update(source_id, {"last_scanned_at": snapshot["scanned_at"], "scan_status": "done"})
+            await CodeSourceStore.update_fields(source_id, {"last_scanned_at": snapshot["scanned_at"], "scan_status": "done"})
 
             return snapshot
 
         except Exception as e:
             source["scan_status"] = "failed"
-            await CodeSourceStore._persist_update(source_id, {"scan_status": "failed"})
+            await CodeSourceStore.update_fields(source_id, {"scan_status": "failed"})
             logger.error(f"Scan failed for source {source_id}: {e}")
             raise CodebaseError(f"Scan failed: {e}")
 
@@ -129,11 +146,15 @@ class CodebaseService:
     async def _scan_github(cls, source: dict) -> dict:
         """Scan a GitHub repo via the GitHub API."""
         repo_url = source["repo_url"].rstrip("/")
-        match = re.search(r"github\.com[:/]([^/]+)/([^/.]+)", repo_url)
+        match = re.search(r"github\.com[:/]([^/]+)/([^/#?]+)", repo_url)
         if not match:
             raise CodebaseError(f"Invalid GitHub URL: {repo_url}")
-        owner, repo = match.group(1), match.group(2)
-        token = source.get("access_token") or ""
+        owner, repo = match.group(1), match.group(2).removesuffix(".git")
+        token, should_migrate_token = cls._read_access_token(source.get("access_token") or "")
+        if should_migrate_token:
+            encrypted_token = encrypt(token)
+            source["access_token"] = encrypted_token
+            await CodeSourceStore.update_fields(source["id"], {"access_token": encrypted_token})
 
         headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "ScopePilot/0.2"}
         if token:
@@ -141,11 +162,11 @@ class CodebaseService:
 
         branch = source.get("default_branch", "main")
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             branch_url = f"https://api.github.com/repos/{owner}/{repo}/branches/{branch}"
             branch_resp = await client.get(branch_url, headers=headers)
             if branch_resp.status_code != 200:
-                raise CodebaseError(f"GitHub API error: {branch_resp.status_code}")
+                raise CodebaseError(f"GitHub branch API error: {branch_resp.status_code} {branch_resp.text[:200]}")
             branch_data = branch_resp.json()
             commit_sha = branch_data.get("commit", {}).get("sha", "")
 
@@ -155,7 +176,9 @@ class CodebaseService:
 
             tree_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
             tree_resp = await client.get(tree_url, headers=headers)
-            tree_data = tree_resp.json() if tree_resp.status_code == 200 else {}
+            if tree_resp.status_code != 200:
+                raise CodebaseError(f"GitHub tree API error: {tree_resp.status_code} {tree_resp.text[:200]}")
+            tree_data = tree_resp.json()
 
             files = []
             if "tree" in tree_data:
@@ -171,12 +194,12 @@ class CodebaseService:
                 "dirs": sorted(set("/".join(f["path"].split("/")[:-1]) for f in files if "/" in f["path"])),
             }
         snapshot = {
-            "code_source_id": source_id,
-            "branch": data.get("branch", source.get("default_branch", "main")),
-            "commit_sha": data.get("commit_sha"),
-            "file_tree": files,
-            "language_breakdown": lang_breakdown,
-            "total_files": len(files),
+            "code_source_id": source["id"],
+            "branch": branch,
+            "commit_sha": commit_sha,
+            "file_tree": file_tree,
+            "language_breakdown": lang_data,
+            "total_files": total_files,
             "total_bytes": total_bytes,
             "total_lines": 0,  # Not estimated — use total_bytes for accuracy
             "scanned_at": datetime.now(timezone.utc).isoformat(),
@@ -202,7 +225,7 @@ class CodebaseService:
         source = cls.get_source(source_id, workspace_id)
         if not source:
             return None
-        snapshots = [s for s in _repo_snapshots.values() if s["code_source_id"] == source_id]
+        snapshots = RepoSnapshotStore.list_by("code_source_id", source_id)
         if not snapshots:
             return None
         return max(snapshots, key=lambda s: s["scanned_at"])
@@ -272,15 +295,15 @@ class CodebaseService:
 
     @classmethod
     def get_impacts_for_sprint(cls, sprint_id: int, workspace_id: int) -> list[dict]:
-        impacts = [i for i in _code_impacts.values() if i.get("sprint_id") == sprint_id]
+        impacts = CodeImpactStore.list_by("sprint_id", sprint_id)
         # Filter by workspace through the code source chain
         return [i for i in impacts
-                if _code_sources.get(i.get("code_source_id"), {}).get("workspace_id") == workspace_id]
+                if (CodeSourceStore.get(i.get("code_source_id")) or {}).get("workspace_id") == workspace_id]
 
     @classmethod
     def get_impact_for_ticket(cls, ticket_id: int, workspace_id: int) -> Optional[dict]:
-        impacts = [i for i in _code_impacts.values() if i.get("ticket_id") == ticket_id]
+        impacts = CodeImpactStore.list_by("ticket_id", ticket_id)
         # Filter by workspace through the code source chain
         filtered = [i for i in impacts
-                    if _code_sources.get(i.get("code_source_id"), {}).get("workspace_id") == workspace_id]
+                    if (CodeSourceStore.get(i.get("code_source_id")) or {}).get("workspace_id") == workspace_id]
         return filtered[0] if filtered else None

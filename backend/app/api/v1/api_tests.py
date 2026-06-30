@@ -1,7 +1,8 @@
 """API Test Plan routes: import OpenAPI specs, generate test plans, export."""
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from typing import Optional
+from typing import Annotated, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Path
+from pydantic import BaseModel, Field
 
 from ...services import get_current_user
 from ...services.api_test_planner import ApiTestPlannerService, ApiTestPlanError
@@ -12,14 +13,14 @@ router = APIRouter()
 # ── Schemas ───────────────────────────────────────────────────────────────
 
 class SpecImportUrl(BaseModel):
-    url: str
-    name: str
+    url: str = Field(pattern=r"^https?://", max_length=1000)
+    name: str = Field(min_length=1, max_length=120)
 
 
 class SpecImportContent(BaseModel):
-    content: str
-    name: str
-    source: str = "inline"
+    content: str = Field(min_length=1, max_length=2_000_000)
+    name: str = Field(min_length=1, max_length=120)
+    source: str = Field(default="inline", min_length=1, max_length=500)
 
 
 class SpecResponse(BaseModel):
@@ -33,7 +34,7 @@ class SpecResponse(BaseModel):
 
 
 class TestPlanGenerate(BaseModel):
-    focus_tags: Optional[list[str]] = None
+    focus_tags: Optional[list[str]] = Field(default=None, max_length=50)
 
 
 class TestPlanResponse(BaseModel):
@@ -99,7 +100,7 @@ async def list_specs(token_data: dict = Depends(get_current_user)):
 
 
 @router.get("/specs/{spec_id}", response_model=SpecResponse)
-async def get_spec(spec_id: int, token_data: dict = Depends(get_current_user)):
+async def get_spec(spec_id: Annotated[int, Path(gt=0)], token_data: dict = Depends(get_current_user)):
     """Get a specific API spec with its endpoints."""
     spec = ApiTestPlannerService.get_spec(spec_id, token_data.get("workspace_id"))
     if not spec:
@@ -108,7 +109,7 @@ async def get_spec(spec_id: int, token_data: dict = Depends(get_current_user)):
 
 
 @router.delete("/specs/{spec_id}", status_code=204)
-async def delete_spec(spec_id: int, token_data: dict = Depends(get_current_user)):
+async def delete_spec(spec_id: Annotated[int, Path(gt=0)], token_data: dict = Depends(get_current_user)):
     """Delete an API spec and related test plans."""
     if not await ApiTestPlannerService.delete_spec(spec_id, token_data.get("workspace_id")):
         raise HTTPException(status_code=404, detail="API spec not found")
@@ -116,7 +117,7 @@ async def delete_spec(spec_id: int, token_data: dict = Depends(get_current_user)
 
 @router.post("/specs/{spec_id}/generate", response_model=TestPlanResponse, status_code=201)
 async def generate_test_plan(
-    spec_id: int,
+    spec_id: Annotated[int, Path(gt=0)],
     data: TestPlanGenerate = TestPlanGenerate(),
     token_data: dict = Depends(get_current_user),
 ):
@@ -139,7 +140,7 @@ async def list_plans(token_data: dict = Depends(get_current_user)):
 
 
 @router.get("/plans/{plan_id}", response_model=TestPlanResponse)
-async def get_plan(plan_id: int, token_data: dict = Depends(get_current_user)):
+async def get_plan(plan_id: Annotated[int, Path(gt=0)], token_data: dict = Depends(get_current_user)):
     """Get a test plan with all scenarios."""
     plan = ApiTestPlannerService.get_plan(plan_id, token_data.get("workspace_id"))
     if not plan:
@@ -149,7 +150,7 @@ async def get_plan(plan_id: int, token_data: dict = Depends(get_current_user)):
 
 @router.get("/plans/{plan_id}/export/markdown", response_model=ExportMarkdownResponse)
 async def export_plan_markdown(
-    plan_id: int,
+    plan_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Export a test plan as Markdown."""
@@ -166,7 +167,7 @@ async def export_plan_markdown(
 
 @router.get("/plans/{plan_id}/export/postman", response_model=ExportPostmanResponse)
 async def export_plan_postman(
-    plan_id: int,
+    plan_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Export a test plan as Postman collection."""

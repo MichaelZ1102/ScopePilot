@@ -1,7 +1,8 @@
 """Figma integration routes: read designs, analyze, generate backend implications."""
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from typing import Optional
+from typing import Annotated, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Path
+from pydantic import BaseModel, Field
 
 from ...services import get_current_user
 from ...services.figma import FigmaService, FigmaError
@@ -12,9 +13,9 @@ router = APIRouter()
 # ── Schemas ───────────────────────────────────────────────────────────────
 
 class FigmaAnalyzeRequest(BaseModel):
-    figma_url: str
-    figma_token: str
-    ticket_summary: str = ""
+    figma_url: str = Field(pattern=r"^https?://(www\.)?figma\.com/", max_length=1000)
+    figma_token: str = Field(min_length=1, max_length=4096)
+    ticket_summary: str = Field(default="", max_length=4000)
 
 
 class FigmaAnalysisResponse(BaseModel):
@@ -97,7 +98,7 @@ async def list_analyses(token_data: dict = Depends(get_current_user)):
 
 @router.get("/analyses/{analysis_id}", response_model=FigmaAnalysisResponse)
 async def get_analysis(
-    analysis_id: int,
+    analysis_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Get a specific Figma analysis."""
@@ -109,7 +110,7 @@ async def get_analysis(
 
 @router.delete("/analyses/{analysis_id}", status_code=204)
 async def delete_analysis(
-    analysis_id: int,
+    analysis_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Delete a Figma analysis."""

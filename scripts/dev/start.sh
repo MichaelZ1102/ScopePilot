@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ScopePilot 一键启动脚本
-# 用法: ./scripts/start.sh [dev|prod]
+# 用法: ./scripts/dev/start.sh [dev|prod]
 
 set -e
 
 MODE="${1:-prod}"
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 
 echo "🚀 ScopePilot - $MODE mode"
 

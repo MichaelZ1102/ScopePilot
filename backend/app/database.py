@@ -210,6 +210,31 @@ class SqliteStore:
         return record
 
     @classmethod
+    def list_all(cls) -> list[dict]:
+        """Return all in-memory records for this store."""
+        return list(cls._store.values())
+
+    @classmethod
+    def get(cls, record_id: int) -> Optional[dict]:
+        """Return one in-memory record by primary id."""
+        return cls._store.get(record_id)
+
+    @classmethod
+    def list_by(cls, field: str, value: Any) -> list[dict]:
+        """Return all records where a field equals the provided value."""
+        return [record for record in cls._store.values() if record.get(field) == value]
+
+    @classmethod
+    def find_by(cls, field: str, value: Any) -> Optional[dict]:
+        """Return the first record where a field equals the provided value."""
+        return next((record for record in cls._store.values() if record.get(field) == value), None)
+
+    @classmethod
+    async def update_fields(cls, record_id: int, updates: dict) -> Optional[dict]:
+        """Update a record by id and persist it."""
+        return await cls._persist_update(record_id, updates)
+
+    @classmethod
     async def _persist_update(cls, record_id: int, updates: dict) -> Optional[dict]:
         """Update a record in the store and persist via single-row upsert."""
         record = cls._store.get(record_id)

@@ -3,7 +3,9 @@
 All endpoints require a valid Bearer token.  The token provides the
 ``workspace_id`` which is used to scope projects and sprints.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from ...schemas import SprintImportRequest, SprintResponse, SprintDetailResponse
 from ...services import get_current_user
@@ -40,6 +42,7 @@ async def import_sprint(
     referenced project.
     """
     project = _get_project(req.project_id, token_data)
+    ws_id = token_data.get("workspace_id")
 
     try:
         result = await JiraService.import_sprint(project, req.sprint_name, ws_id)
@@ -54,7 +57,7 @@ async def import_sprint(
 
 @router.get("/", response_model=list[SprintResponse])
 async def list_sprints(
-    project_id: int,
+    project_id: Annotated[int, Query(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """List all sprints belonging to a project."""
@@ -72,7 +75,7 @@ async def list_sprints(
 
 @router.get("/{sprint_id}", response_model=SprintDetailResponse)
 async def get_sprint(
-    sprint_id: int,
+    sprint_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Get full sprint details including imported tickets."""

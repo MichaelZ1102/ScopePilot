@@ -60,20 +60,23 @@ def _migrate_from_json(entity_name: str, store_cls: type) -> bool:
 def load_persisted_data():
     """Load all SqliteStore-backed data from SQLite into memory."""
     from .services.jira import SprintStore, TicketStore
+    from .services.analysis import AnalysisJobStore
     from .services.codebase import CodeSourceStore, RepoSnapshotStore, CodeImpactStore
     from .services.api_test_planner import ApiSpecStore, TestPlanStore
     from .services.figma import FigmaAnalysisStore
-    from .services.team import TeamMemberStore, UsageRecordStore, SharedReportStore
+    from .services.team import TeamMemberStore, UsageRecordStore, SharedReportStore, BillingStore
     from .api.v1.projects import ProjectStore
     from .api.v1.auth import UserStore, WorkspaceStore
 
     stores = [
         ("sprints", SprintStore), ("tickets", TicketStore),
+        ("analysis_jobs", AnalysisJobStore),
         ("code_sources", CodeSourceStore), ("repo_snapshots", RepoSnapshotStore),
         ("code_impacts", CodeImpactStore),
         ("api_specs", ApiSpecStore), ("test_plans", TestPlanStore),
         ("figma_analyses", FigmaAnalysisStore),
         ("team_members", TeamMemberStore), ("usage_records", UsageRecordStore),
+        ("billing", BillingStore),
         ("shared_reports", SharedReportStore),
         ("projects", ProjectStore),
         ("auth_users", UserStore), ("auth_workspaces", WorkspaceStore),
