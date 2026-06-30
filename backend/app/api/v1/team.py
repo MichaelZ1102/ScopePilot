@@ -1,41 +1,60 @@
 """Team & billing routes: members, usage, billing tiers, report sharing."""
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Path
+from pydantic import BaseModel, Field, field_validator
+from typing import Annotated, Literal, Optional
 
 from ...services import get_current_user
 from ...services.team import TeamService, TeamError
 
 router = APIRouter()
+EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+
+
+def _verify_sprint_access(sprint_id: int, workspace_id: int) -> None:
+    from ...services.jira import JiraService
+    from .projects import _projects
+
+    sprint = JiraService.get_sprint(sprint_id)
+    if not sprint:
+        raise HTTPException(status_code=404, detail="Sprint not found")
+
+    project = _projects.get(sprint["project_id"])
+    if not project or project.get("workspace_id") != workspace_id:
+        raise HTTPException(status_code=404, detail="Sprint not found")
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────
 
 class UpgradeRequest(BaseModel):
-    tier: str
-    payment_token: str = ""
+    tier: Literal["pro", "enterprise"]
+    payment_token: str = Field(default="", max_length=4096)
 
 
 class MemberAddRequest(BaseModel):
-    email: str
-    name: str
-    role: str = "member"
+    email: str = Field(pattern=EMAIL_PATTERN, max_length=254)
+    name: str = Field(min_length=1, max_length=100)
+    role: Literal["admin", "member", "viewer"] = "member"
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class MemberRoleUpdate(BaseModel):
-    role: str
+    role: Literal["admin", "member", "viewer"]
 
 
 class ShareRequest(BaseModel):
-    sprint_id: int
-    title: str
-    shared_by: str = ""
-    expires_in_days: int = 30
-    password: str = ""
+    sprint_id: int = Field(gt=0)
+    title: str = Field(min_length=1, max_length=200)
+    shared_by: str = Field(default="", max_length=254)
+    expires_in_days: int = Field(default=30, ge=1, le=365)
+    password: str = Field(default="", max_length=256)
 
 
 class ShareAccessRequest(BaseModel):
-    password: str = ""
+    password: str = Field(default="", max_length=256)
 
 
 # ── Tiers ─────────────────────────────────────────────────────────────────
@@ -105,7 +124,7 @@ async def add_member(
 
 @router.patch("/members/{member_id}/role")
 async def update_member_role(
-    member_id: int,
+    member_id: Annotated[int, Path(gt=0)],
     data: MemberRoleUpdate,
     token_data: dict = Depends(get_current_user),
 ):
@@ -120,7 +139,7 @@ async def update_member_role(
 
 @router.delete("/members/{member_id}", status_code=204)
 async def remove_member(
-    member_id: int,
+    member_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Remove a member from the workspace."""
@@ -137,9 +156,11 @@ async def share_report(
     token_data: dict = Depends(get_current_user),
 ):
     """Create a shareable report link."""
+    workspace_id = token_data.get("workspace_id")
+    _verify_sprint_access(data.sprint_id, workspace_id)
     try:
         return await TeamService.share_report(
-            workspace_id=token_data.get("workspace_id"),
+            workspace_id=workspace_id,
             sprint_id=data.sprint_id,
             title=data.title,
             shared_by=data.shared_by or token_data.get("sub", ""),
@@ -172,6 +193,15 @@ async def access_shared_report(
         report = await TeamService.get_shared_report(share_token, data.password)
         if not report:
             raise HTTPException(status_code=404, detail="Shared report not found or expired")
+        try:
+            from .reports import _build_report
+            report["content"] = _build_report(
+                report["sprint_id"],
+                {"workspace_id": report["workspace_id"]},
+            )
+        except HTTPException as exc:
+            report["content"] = ""
+            report["content_error"] = exc.detail
         return report
     except TeamError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -179,7 +209,7 @@ async def access_shared_report(
 
 @router.delete("/shared/{share_id}", status_code=204)
 async def revoke_share(
-    share_id: int,
+    share_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Revoke a shared report link."""

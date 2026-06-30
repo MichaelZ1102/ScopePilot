@@ -42,6 +42,9 @@ export interface TeamMember {
 export interface SharedReport {
   id: number; workspace_id: number; sprint_id: number; title: string; shared_by: string; share_token: string; view_count: number; is_password_protected: boolean; created_at: string; expires_at: string; is_active: boolean
 }
+export interface SharedReportAccess extends SharedReport {
+  content?: string; content_error?: string
+}
 export interface ApiSpec {
   id: number; name: string; title: string; version: string; source: string; endpoint_count: number; created_at: string
 }

@@ -6,6 +6,7 @@ import {
   exportPlanMarkdown, exportPlanPostman,
   type ApiSpec, type TestPlan,
 } from '../lib/api'
+import { getApiErrorMessage } from '../lib/client'
 
 const styles: any = {
   page: { maxWidth: 1100, margin: '0 auto' },
@@ -83,8 +84,8 @@ export default function ApiTestPlans() {
       setShowImport(false)
       setImportForm({ url: '', name: '', content: '' })
       await loadData()
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || '导入失败')
+    } catch (err: unknown) {
+      alert(getApiErrorMessage(err, 'Import failed'))
     } finally { setImporting(false) }
   }
 
@@ -99,8 +100,8 @@ export default function ApiTestPlans() {
       setPlans(await listTestPlans())
       setViewPlan(plan)
       setTab('plans')
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || '生成失败')
+    } catch (err: unknown) {
+      alert(getApiErrorMessage(err, 'Generate failed'))
     }
   }
 

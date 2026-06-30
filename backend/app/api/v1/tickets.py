@@ -3,7 +3,9 @@
 All endpoints require a valid Bearer token and verify workspace access
 through the containing sprint/project.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Path
 
 from ...schemas import TicketDetailResponse
 from ...services import get_current_user
@@ -28,7 +30,7 @@ def _get_sprint_or_404(sprint_id: int, token_data: dict) -> dict:
 
 @router.get("/{sprint_id}/tickets", response_model=list[TicketDetailResponse])
 async def list_tickets(
-    sprint_id: int,
+    sprint_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """List all tickets in a sprint."""
@@ -45,8 +47,8 @@ async def list_tickets(
     response_model=TicketDetailResponse,
 )
 async def get_ticket(
-    sprint_id: int,
-    ticket_id: int,
+    sprint_id: Annotated[int, Path(gt=0)],
+    ticket_id: Annotated[int, Path(gt=0)],
     token_data: dict = Depends(get_current_user),
 ):
     """Get a single ticket detail."""

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { listProjects, listSprints, importSprint, type Project, type Sprint } from '../lib/api'
+import { getApiErrorMessage } from '../lib/client'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const styles: any = {
@@ -75,11 +76,7 @@ export default function Dashboard() {
       setSprintName('')
       navigate(`/sprint/${sprint.id}`)
     } catch (err: unknown) {
-      const msg =
-        err && typeof err === 'object' && 'response' in err
-          ? ((err as { response: { data: { detail: string } } }).response?.data?.detail ?? t('dashboard.import_failed'))
-          : t('dashboard.import_failed')
-      alert(msg)
+      alert(getApiErrorMessage(err, t('dashboard.import_failed')))
     } finally {
       setImporting(false)
     }

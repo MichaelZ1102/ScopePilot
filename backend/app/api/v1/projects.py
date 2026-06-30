@@ -1,12 +1,14 @@
 """Project management routes - CRUD + Jira config."""
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Path
 
 from ...schemas import ProjectCreate, ProjectResponse, ProjectUpdate
 from ...services import get_current_user
 from ...database import SqliteStore
 from ...services.jira import JiraService
-from ...encryption import encrypt, decrypt
+from ...encryption import encrypt
 
 router = APIRouter()
 
@@ -26,10 +28,7 @@ _next_id = ProjectStore._next_id
 async def list_projects(token_data: dict = Depends(get_current_user)):
     """List all projects in current workspace."""
     ws_id = token_data.get("workspace_id")
-    return [
-        ProjectResponse(**p) for p in _projects.values()
-        if p["workspace_id"] == ws_id
-    ]
+    return [ProjectResponse(**p) for p in ProjectStore.list_by("workspace_id", ws_id)]
 
 
 @router.post("/", response_model=ProjectResponse, status_code=201)
@@ -54,10 +53,10 @@ async def create_project(req: ProjectCreate, token_data: dict = Depends(get_curr
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
-async def get_project(project_id: int, token_data: dict = Depends(get_current_user)):
+async def get_project(project_id: Annotated[int, Path(gt=0)], token_data: dict = Depends(get_current_user)):
     """Get project details."""
     ws_id = token_data.get("workspace_id")
-    project = _projects.get(project_id)
+    project = ProjectStore.get(project_id)
     if not project or project["workspace_id"] != ws_id:
         raise HTTPException(status_code=404, detail="Project not found")
     return ProjectResponse(**project)
@@ -65,12 +64,12 @@ async def get_project(project_id: int, token_data: dict = Depends(get_current_us
 
 @router.put("/{project_id}", response_model=ProjectResponse)
 async def update_project(
-    project_id: int, req: ProjectUpdate,
+    project_id: Annotated[int, Path(gt=0)], req: ProjectUpdate,
     token_data: dict = Depends(get_current_user),
 ):
     """Update project configuration."""
     ws_id = token_data.get("workspace_id")
-    project = _projects.get(project_id)
+    project = ProjectStore.get(project_id)
     if not project or project["workspace_id"] != ws_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -78,15 +77,15 @@ async def update_project(
     if "jira_api_token" in update_data:
         update_data["jira_api_token"] = encrypt(update_data["jira_api_token"])
     project.update(update_data)
-    await ProjectStore._persist_update(project_id, update_data)
+    await ProjectStore.update_fields(project_id, update_data)
     return ProjectResponse(**project)
 
 
 @router.delete("/{project_id}", status_code=204)
-async def delete_project(project_id: int, token_data: dict = Depends(get_current_user)):
+async def delete_project(project_id: Annotated[int, Path(gt=0)], token_data: dict = Depends(get_current_user)):
     """Delete a project and cascade-delete its sprints and tickets."""
     ws_id = token_data.get("workspace_id")
-    project = _projects.get(project_id)
+    project = ProjectStore.get(project_id)
     if not project or project["workspace_id"] != ws_id:
         raise HTTPException(status_code=404, detail="Project not found")
     # Cascade delete sprints and tickets

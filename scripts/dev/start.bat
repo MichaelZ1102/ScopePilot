@@ -12,14 +12,14 @@ if "%1"=="dev" goto dev
 if "%1"=="build" goto build
 
 echo Usage:
-echo   scripts\start.bat prod    - Production mode (single port)
-echo   scripts\start.bat dev     - Development mode (hot reload)
-echo   scripts\start.bat build   - Build frontend only
+echo   scripts\dev\start.bat prod    - Production mode (single port)
+echo   scripts\dev\start.bat dev     - Development mode (hot reload)
+echo   scripts\dev\start.bat build   - Build frontend only
 goto end
 
 :build
 echo [1/3] Installing frontend dependencies...
-cd /d "%~dp0..\frontend"
+cd /d "%~dp0..\..\frontend"
 call npm install 2>nul
 echo [2/3] Building frontend...
 call npm run build
@@ -31,10 +31,10 @@ goto end
 :prod
 echo [*] Production mode — http://localhost:8000
 echo.
-call "%~dp0..\scripts\start.bat" build
+call "%~dp0start.bat" build
 echo.
 echo [*] Starting backend server...
-cd /d "%~dp0..\backend"
+cd /d "%~dp0..\..\backend"
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 goto end
 
@@ -44,9 +44,9 @@ echo     Frontend: http://localhost:5173
 echo     Backend:  http://localhost:8000
 echo.
 echo [1/2] Starting backend (port 8000)...
-start "ScopePilot-Backend" /B cmd /c "cd /d "%~dp0..\backend" && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+start "ScopePilot-Backend" /B cmd /c "cd /d ""%~dp0..\..\backend"" && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
 echo [2/2] Starting frontend (port 5173)...
-start "ScopePilot-Frontend" /B cmd /c "cd /d "%~dp0..\frontend" && npm run dev"
+start "ScopePilot-Frontend" /B cmd /c "cd /d ""%~dp0..\..\frontend"" && npm run dev"
 echo.
 echo Both servers starting in background windows...
 echo Close this window to stop both servers.

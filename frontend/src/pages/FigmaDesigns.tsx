@@ -3,6 +3,7 @@ import {
   analyzeFigmaDesign, listFigmaAnalyses, deleteFigmaAnalysis,
   type FigmaAnalysis,
 } from '../lib/api'
+import { getApiErrorMessage } from '../lib/client'
 
 const styles: any = {
   page: { maxWidth: 1100, margin: '0 auto' },
@@ -58,8 +59,8 @@ export default function FigmaDesigns() {
       setForm({ figma_url: '', figma_token: '', ticket_summary: '' })
       await loadData()
       setViewResult(result)
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || '分析失败')
+    } catch (err: unknown) {
+      alert(getApiErrorMessage(err, 'Analysis failed'))
     } finally { setAnalyzing(false) }
   }
 

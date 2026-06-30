@@ -41,10 +41,16 @@ class JiraService:
     @staticmethod
     def create_client(project: dict) -> JiraClient:
         """Build a JiraClient from a project's stored Jira configuration."""
+        try:
+            api_token = decrypt(project["jira_api_token"])
+        except Exception as exc:
+            raise JiraServiceError(
+                "Stored Jira API token cannot be decrypted. Please update the project Jira token."
+            ) from exc
         config = JiraConfig(
             url=project["jira_url"].rstrip("/"),
             email=project["jira_email"],
-            api_token=decrypt(project["jira_api_token"]),
+            api_token=api_token,
             project_key=project.get("jira_project_key"),
         )
         return JiraClient(config)
@@ -120,20 +126,20 @@ class JiraService:
             ticket_ids.append(tid)
 
         sprint["ticket_ids"] = ticket_ids
-        return {**sprint, "tickets": [_tickets[tid] for tid in ticket_ids]}
+        return {**sprint, "tickets": [TicketStore.get(tid) for tid in ticket_ids if TicketStore.get(tid)]}
 
     # ── Retrieve ─────────────────────────────────────────────────────────
 
     @classmethod
     def get_sprint(cls, sprint_id: int) -> Optional[dict]:
         """Get a sprint with its tickets."""
-        sprint = _sprints.get(sprint_id)
+        sprint = SprintStore.get(sprint_id)
         if sprint is None:
             return None
         ticket_ids = sprint.get("ticket_ids", [])
         return {
             **sprint,
-            "tickets": [_tickets.get(tid) for tid in ticket_ids if tid in _tickets],
+            "tickets": [TicketStore.get(tid) for tid in ticket_ids if TicketStore.get(tid)],
         }
 
     @classmethod
@@ -143,34 +149,33 @@ class JiraService:
             {"id": s["id"], "name": s["name"], "state": s["state"],
              "total_tickets": s["total_tickets"], "analysis_status": s["analysis_status"],
              "imported_at": s.get("imported_at")}
-            for s in _sprints.values()
-            if s["project_id"] == project_id
+            for s in SprintStore.list_by("project_id", project_id)
         ]
 
     @classmethod
     def get_ticket(cls, ticket_id: int) -> Optional[dict]:
-        return _tickets.get(ticket_id)
+        return TicketStore.get(ticket_id)
 
     @classmethod
     def list_tickets(cls, sprint_id: int) -> list[dict]:
         """List all tickets in a sprint."""
-        return [t for t in _tickets.values() if t.get("sprint_id") == sprint_id]
+        return TicketStore.list_by("sprint_id", sprint_id)
 
     @classmethod
     async def update_sprint(cls, sprint_id: int, updates: dict):
-        if sprint_id in _sprints:
-            await SprintStore._persist_update(sprint_id, updates)
+        if SprintStore.get(sprint_id):
+            await SprintStore.update_fields(sprint_id, updates)
 
     @classmethod
     async def update_ticket(cls, ticket_id: int, updates: dict):
-        if ticket_id in _tickets:
-            await TicketStore._persist_update(ticket_id, updates)
+        if TicketStore.get(ticket_id):
+            await TicketStore.update_fields(ticket_id, updates)
 
     @classmethod
     async def delete_project_data(cls, project_id: int):
         """Delete all sprints and tickets belonging to a project (cascade)."""
-        sprint_ids = [s["id"] for s in _sprints.values() if s["project_id"] == project_id]
-        ticket_ids = [t["id"] for t in _tickets.values() if t["sprint_id"] in sprint_ids]
+        sprint_ids = [s["id"] for s in SprintStore.list_by("project_id", project_id)]
+        ticket_ids = [t["id"] for t in TicketStore.list_all() if t["sprint_id"] in sprint_ids]
         for tid in ticket_ids:
             await TicketStore._persist_delete(tid)
         for sid in sprint_ids:

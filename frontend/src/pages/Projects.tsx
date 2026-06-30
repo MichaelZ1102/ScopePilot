@@ -2,6 +2,7 @@ import { useState, useEffect, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { listProjects, createProject, deleteProject, importSprint, type Project } from '../lib/api'
+import { getApiErrorMessage } from '../lib/client'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const styles: any = {
@@ -55,10 +56,7 @@ export default function Projects() {
       setForm({ name: '', jira_url: '', jira_email: '', jira_api_token: '', jira_project_key: '' })
       await loadProjects()
     } catch (err: unknown) {
-      const msg = err && typeof err === 'object' && 'response' in err
-        ? ((err as { response: { data: { detail: string } } }).response?.data?.detail ?? t('projects.create_failed'))
-        : t('projects.create_failed')
-      alert(msg)
+      alert(getApiErrorMessage(err, t('projects.create_failed')))
     } finally { setCreating(false) }
   }
 
@@ -76,10 +74,7 @@ export default function Projects() {
       setImportProject(null); setSprintName('')
       navigate(`/sprint/${sprint.id}`)
     } catch (err: unknown) {
-      const msg = err && typeof err === 'object' && 'response' in err
-        ? ((err as { response: { data: { detail: string } } }).response?.data?.detail ?? t('projects.import_failed'))
-        : t('projects.import_failed')
-      alert(msg)
+      alert(getApiErrorMessage(err, t('projects.import_failed')))
     } finally { setImporting(false) }
   }
 

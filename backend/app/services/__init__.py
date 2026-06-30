@@ -97,7 +97,7 @@ def set_token_cookie(response: Response, token: str, max_age: int = None):
         expires=max_age,
         httponly=True,
         samesite="lax",
-        secure=False,  # Set True in production with HTTPS
+        secure=settings.cookie_secure,
         path="/",
     )
 

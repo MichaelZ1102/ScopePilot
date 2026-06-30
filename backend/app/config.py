@@ -1,11 +1,15 @@
 """Application configuration."""
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from typing import Optional
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(
+        extra="ignore",
+        env_file=(".env", "../.env"),
+        env_file_encoding="utf-8",
+    )
 
     app_name: str = "ScopePilot"
     debug: bool = False
@@ -13,7 +17,8 @@ class Settings(BaseSettings):
     secret_key: str
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440  # 24h
-    cors_origins: list[str] = [
+    cookie_secure: bool = False
+    cors_origins: list[str] | str = [
         "http://localhost:5173",
         "http://localhost:3000",
         "http://localhost:8000",
@@ -23,6 +28,13 @@ class Settings(BaseSettings):
     jira_url: Optional[str] = None
     jira_email: Optional[str] = None
     jira_api_token: Optional[str] = None
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _parse_cors_origins(cls, value):
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
 
     @model_validator(mode="after")
     def _validate_secret_key(self):

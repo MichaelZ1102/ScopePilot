@@ -5,7 +5,7 @@ from time import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from ...services import (
     hash_password, verify_password, create_access_token,
@@ -16,6 +16,7 @@ from ...services import security
 from ...database import SqliteStore
 
 router = APIRouter()
+EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 # --- Lightweight in-memory login rate limiter ---
 _LOGIN_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
@@ -36,8 +37,13 @@ def _record_login_attempt(client_key: str) -> None:
 
 # --- Request/Response schemas ---
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(pattern=EMAIL_PATTERN, max_length=254)
+    password: str = Field(min_length=1, max_length=256)
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class LoginResponse(BaseModel):
@@ -47,10 +53,15 @@ class LoginResponse(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    email: str
-    name: str
-    password: str
-    workspace_name: str = "My Workspace"
+    email: str = Field(pattern=EMAIL_PATTERN, max_length=254)
+    name: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=8, max_length=256)
+    workspace_name: str = Field(default="My Workspace", min_length=1, max_length=100)
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class RegisterResponse(BaseModel):
@@ -80,28 +91,36 @@ _workspaces: dict[int, dict] = WorkspaceStore._store
 
 def _rebuild_email_index():
     _users_by_email.clear()
-    for u in _users.values():
-        email = u.get("email", "")
+    for u in UserStore.list_all():
+        email = u.get("email", "").strip().lower()
         if email:
+            u["email"] = email
             _users_by_email[email] = u
 
 
-async def _get_or_create_default_workspace() -> dict:
-    if not _workspaces:
-        ws_id = WorkspaceStore._persist_next_id()
-        ws = {"id": ws_id, "name": "Default Workspace",
-              "created_at": datetime.now(timezone.utc).isoformat()}
-        await WorkspaceStore._persist_add(ws)
-    return list(_workspaces.values())[0]
+def _find_user_by_email(email: str) -> dict | None:
+    normalized = email.strip().lower()
+    return UserStore.find_by("email", normalized)
+
+
+async def _create_workspace(name: str) -> dict:
+    ws_id = WorkspaceStore._persist_next_id()
+    ws = {
+        "id": ws_id,
+        "name": name.strip() or "My Workspace",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await WorkspaceStore._persist_add(ws)
+    return ws
 
 
 @router.post("/register")
 async def register(req: RegisterRequest, response: Response):
     """Register a new user with workspace."""
-    if req.email in _users_by_email:
+    if _find_user_by_email(req.email):
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    ws = await _get_or_create_default_workspace()
+    ws = await _create_workspace(req.workspace_name)
     user_id = UserStore._persist_next_id()
 
     user = {
@@ -113,7 +132,6 @@ async def register(req: RegisterRequest, response: Response):
         "workspace_id": ws["id"],
     }
     await UserStore._persist_add(user)
-    _users_by_email[req.email] = user
 
     token = create_access_token({"sub": req.email, "user_id": user_id, "workspace_id": ws["id"]})
     set_token_cookie(response, token)  # Set HttpOnly cookie via response parameter
@@ -131,7 +149,7 @@ async def login(req: LoginRequest, request: Request, response: Response):
     if _is_login_rate_limited(client_key):
         raise HTTPException(status_code=429, detail="Too many login attempts. Please try again later.")
 
-    user = _users_by_email.get(req.email)
+    user = _find_user_by_email(req.email)
     if not user or not verify_password(req.password, user["hashed_password"]):
         _record_login_attempt(client_key)
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -164,7 +182,7 @@ async def logout(request: Request, response: Response):
 async def get_me(token_data: dict = Depends(get_current_user_from_cookie)):
     """Get current user info from token (cookie or Bearer)."""
     email = token_data.get("sub")
-    user = _users_by_email.get(email)
+    user = _find_user_by_email(email or "")
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return {
@@ -181,7 +199,7 @@ async def get_me(token_data: dict = Depends(get_current_user_from_cookie)):
 async def get_workspace(token_data: dict = Depends(get_current_user)):
     """Get current workspace info."""
     ws_id = token_data.get("workspace_id")
-    ws = _workspaces.get(ws_id)
+    ws = WorkspaceStore.get(ws_id)
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
     return ws

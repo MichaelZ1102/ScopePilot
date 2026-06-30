@@ -4,6 +4,8 @@ Phase 5: In-memory store persisted to local JSON via SqliteStore.
 """
 import json
 import secrets
+import hashlib
+import bcrypt as _bcrypt
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -90,11 +92,19 @@ _load_custom_tiers()
 class TeamService:
     """Service for team management, billing, usage tracking, and report sharing."""
 
+    @staticmethod
+    def _get_billing_entry(workspace_id: int) -> Optional[dict]:
+        return BillingStore.get(workspace_id) or BillingStore.find_by("workspace_id", workspace_id)
+
+    @staticmethod
+    def _get_usage_record(workspace_id: int) -> Optional[dict]:
+        return UsageRecordStore.get(workspace_id) or UsageRecordStore.find_by("workspace_id", workspace_id)
+
     # ── Workspace Billing ─────────────────────────────────────────────────
 
     @classmethod
     def get_workspace_billing(cls, workspace_id: int) -> dict:
-        entry = _billing.get(workspace_id, {})
+        entry = cls._get_billing_entry(workspace_id) or {}
         tier_name = entry.get("tier", "free")
         return {"workspace_id": workspace_id, "tier": tier_name,
                 "tier_info": TIERS[tier_name], "features": cls._get_enabled_features(tier_name)}
@@ -105,12 +115,12 @@ class TeamService:
             raise TeamError(f"Invalid tier: {tier}. Choose from: {', '.join(TIERS.keys())}")
         if tier == "free":
             raise TeamError("Free tier is the default. Use 'pro' or 'enterprise'.")
-        entry = _billing.get(workspace_id)
+        entry = cls._get_billing_entry(workspace_id)
         if entry is None:
-            entry = {"id": BillingStore._persist_next_id(), "workspace_id": workspace_id}
-            _billing[workspace_id] = entry
+            entry = {"id": workspace_id, "workspace_id": workspace_id}
+            await BillingStore._persist_add(entry)
         entry["tier"] = tier
-        await BillingStore._persist_update(workspace_id, {"tier": tier})
+        await BillingStore.update_fields(entry["id"], {"tier": tier})
         return {"workspace_id": workspace_id, "tier": tier, "tier_info": TIERS[tier],
                 "features": cls._get_enabled_features(tier),
                 "message": f"Upgraded to {TIERS[tier]['name']} tier successfully."}
@@ -132,7 +142,7 @@ class TeamService:
 
     @classmethod
     async def get_usage(cls, workspace_id: int) -> dict:
-        usage = _usage_records.get(workspace_id)
+        usage = cls._get_usage_record(workspace_id)
         if not usage:
             now = datetime.now(timezone.utc)
             usage = {
@@ -142,13 +152,11 @@ class TeamService:
                 "analyses_run": 0, "repo_scans": 0, "api_specs_imported": 0,
                 "figma_analyses": 0, "members_active": 0, "projects_count": 0, "sprints_imported": 0,
             }
-            usage_id = UsageRecordStore._persist_next_id()
-            usage["id"] = usage_id
-            _usage_records[workspace_id] = usage
+            usage["id"] = workspace_id
             await UsageRecordStore._persist_add(usage)
 
         tier_info = TIERS["free"]
-        entry = _billing.get(workspace_id, {})
+        entry = cls._get_billing_entry(workspace_id) or {}
         tier_name = entry.get("tier", "free")
         if tier_name in TIERS:
             tier_info = TIERS[tier_name]
@@ -164,10 +172,12 @@ class TeamService:
 
     @classmethod
     async def increment_usage(cls, workspace_id: int, metric: str, amount: int = 1):
-        await cls.get_usage(workspace_id)
-        if workspace_id in _usage_records and metric in _usage_records[workspace_id]:
-            _usage_records[workspace_id][metric] += amount
-            await UsageRecordStore._persist_update(workspace_id, {})
+        usage = (await cls.get_usage(workspace_id))["current"]
+        if metric in usage:
+            usage[metric] += amount
+            if usage[metric] < 0:
+                usage[metric] = 0
+            await UsageRecordStore.update_fields(usage["id"], {})
 
     @classmethod
     async def check_usage_limit(cls, workspace_id: int, metric: str) -> tuple[bool, str]:
@@ -186,14 +196,14 @@ class TeamService:
 
     @classmethod
     def list_members(cls, workspace_id: int) -> list[dict]:
-        return [m for m in _team_members.values() if m["workspace_id"] == workspace_id]
+        return TeamMemberStore.list_by("workspace_id", workspace_id)
 
     @classmethod
     async def add_member(cls, workspace_id: int, email: str, name: str, role: str = "member", invited_by: Optional[str] = None) -> dict:
         allowed, reason = await cls.check_usage_limit(workspace_id, "members_active")
         if not allowed:
             raise TeamError(reason + ". Upgrade your plan to add more members.")
-        existing = [m for m in _team_members.values() if m["workspace_id"] == workspace_id and m["email"] == email]
+        existing = [m for m in TeamMemberStore.list_by("workspace_id", workspace_id) if m["email"] == email]
         if existing:
             raise TeamError(f"Member {email} already exists in this workspace.")
 
@@ -206,20 +216,21 @@ class TeamService:
 
     @classmethod
     async def update_member_role(cls, workspace_id: int, member_id: int, role: str) -> Optional[dict]:
-        member = _team_members.get(member_id)
+        member = TeamMemberStore.get(member_id)
         if member and member["workspace_id"] == workspace_id:
             if role not in ("admin", "member", "viewer"):
                 raise TeamError(f"Invalid role: {role}")
             member["role"] = role
-            await TeamMemberStore._persist_update(member_id, {"role": role})
+            await TeamMemberStore.update_fields(member_id, {"role": role})
             return member
         return None
 
     @classmethod
     async def remove_member(cls, workspace_id: int, member_id: int) -> bool:
-        member = _team_members.get(member_id)
+        member = TeamMemberStore.get(member_id)
         if member and member["workspace_id"] == workspace_id:
             await TeamMemberStore._persist_delete(member_id)
+            await cls.increment_usage(workspace_id, "members_active", -1)
             return True
         return False
 
@@ -228,7 +239,7 @@ class TeamService:
     @classmethod
     async def share_report(cls, workspace_id: int, sprint_id: int, title: str,
                      shared_by: str = "", expires_in_days: int = 30, password: str = "") -> dict:
-        entry = _billing.get(workspace_id, {})
+        entry = cls._get_billing_entry(workspace_id) or {}
         tier_name = entry.get("tier", "free")
         tier_info = TIERS.get(tier_name, TIERS["free"])
         if not tier_info["report_sharing"]:
@@ -248,17 +259,26 @@ class TeamService:
 
     @staticmethod
     def _hash_password(password: str) -> str:
-        import hashlib
-        return hashlib.sha256(password.encode()).hexdigest()
+        return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
+
+    @staticmethod
+    def _verify_password(password: str, password_hash: str) -> tuple[bool, str]:
+        if password_hash.startswith("$2"):
+            return _bcrypt.checkpw(password.encode(), password_hash.encode()), ""
+
+        legacy_hash = hashlib.sha256(password.encode()).hexdigest()
+        if legacy_hash == password_hash:
+            return True, TeamService._hash_password(password)
+        return False, ""
 
     @classmethod
     def list_shared_reports(cls, workspace_id: int) -> list[dict]:
         return [{k: v for k, v in r.items() if k != "password_hash"}
-                for r in _shared_reports.values() if r["workspace_id"] == workspace_id]
+                for r in SharedReportStore.list_by("workspace_id", workspace_id)]
 
     @classmethod
     async def get_shared_report(cls, share_token: str, password: str = "") -> Optional[dict]:
-        share = next((s for s in _shared_reports.values() if s["share_token"] == share_token), None)
+        share = SharedReportStore.find_by("share_token", share_token)
         if not share or not share.get("is_active", True):
             return None
         if share.get("expires_at") and share["expires_at"] < datetime.now(timezone.utc).isoformat():
@@ -266,22 +286,26 @@ class TeamService:
         if share.get("is_password_protected") and share.get("password_hash"):
             if not password:
                 raise TeamError("This report is password protected.")
-            if cls._hash_password(password) != share["password_hash"]:
+            valid, migrated_hash = cls._verify_password(password, share["password_hash"])
+            if not valid:
                 raise TeamError("Invalid password.")
+            if migrated_hash:
+                share["password_hash"] = migrated_hash
+                await SharedReportStore.update_fields(share["id"], {"password_hash": migrated_hash})
         share["view_count"] = share.get("view_count", 0) + 1
-        await SharedReportStore._persist_update(share["id"], {"view_count": share["view_count"]})
+        await SharedReportStore.update_fields(share["id"], {"view_count": share["view_count"]})
         return {k: v for k, v in share.items() if k != "password_hash"}
 
     @classmethod
     async def revoke_share(cls, workspace_id: int, share_id: int) -> bool:
-        share = _shared_reports.get(share_id)
+        share = SharedReportStore.get(share_id)
         if share and share["workspace_id"] == workspace_id:
             share["is_active"] = False
-            await SharedReportStore._persist_update(share_id, {"is_active": False})
+            await SharedReportStore.update_fields(share_id, {"is_active": False})
             return True
         return False
 
     @classmethod
     def get_sharing_history(cls, workspace_id: int) -> list[dict]:
         return [{k: v for k, v in s.items() if k != "password_hash"}
-                for s in _shared_reports.values() if s["workspace_id"] == workspace_id]
+                for s in SharedReportStore.list_by("workspace_id", workspace_id)]

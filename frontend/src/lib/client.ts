@@ -20,4 +20,14 @@ api.interceptors.response.use(
   }
 )
 
+export function getApiErrorMessage(error: unknown, fallback: string) {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail
+    if (typeof detail === 'string' && detail.trim()) return detail
+    if (Array.isArray(detail) && detail.length > 0) return 'Invalid request data.'
+    if (error.message) return error.message
+  }
+  return fallback
+}
+
 export default api

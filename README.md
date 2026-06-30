@@ -79,9 +79,9 @@ npm run build
 docker compose up --build
 
 # 方式二：一键启动（开发）
-scripts\start.bat dev        # Windows
+scripts\dev\start.bat dev    # Windows
 # 或
-./scripts/start.sh dev       # Linux/Mac
+./scripts/dev/start.sh dev   # Linux/Mac
 
 # 方式三：手动
 cd backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
@@ -196,6 +196,13 @@ ScopePilot/
 
 - Swagger UI: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
+
+## 当前限制
+
+- 当前持久化层以本地 SQLite + 进程内缓存为主，适合单实例部署；多实例部署前需要迁移到共享数据库并收口缓存一致性。
+- 后台分析任务已从请求线程移出，但进度推送仍以轮询为主，尚未接入 WebSocket 或任务队列。
+- 前端仍有部分页面使用 inline style 和浏览器 `alert`，后续可继续迁移到统一组件、通知系统和 TanStack Query。
+- 报告导出与共享已可用，但 PDF/Jira 等高级导出能力仍依赖后续实现和环境配置。
 
 ---
 
