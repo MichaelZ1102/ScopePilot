@@ -62,15 +62,12 @@ JIRA_EMAIL=your@email.com
 JIRA_API_TOKEN=your_jira_token
 JIRA_PROJECT_KEY=PROJ
 
-# AI provider（AI 分析/API 测试计划等增强功能至少配置一个）
-OPENCODE_API_KEY=your-opencode-api-key
-OPENCODE_MODEL=deepseek-v4-flash
-OPENCODE_BASE_URL=https://opencode.ai/zen/go/v1
-
-# 或：
-# GROQ_API_KEY=gsk_your-groq-key
-# STEPFUN_API_KEY=sk-your-stepfun-key
-# OPENAI_API_KEY=sk-your-openai-key
+# AI provider（AI 分析/API 测试计划等增强功能需要）
+# 支持：opencode / groq / stepfun / openai
+AI_PROVIDER=stepfun
+AI_API_KEY=your-ai-api-key
+AI_MODEL=step-3.7-flash
+AI_BASE_URL=https://api.stepfun.com/step_plan/v1
 ```
 
 GitHub 仓库访问 Token 在 Codebase 页面按代码源填写；Figma Token 在 Figma 分析页面填写，不需要全局环境变量。

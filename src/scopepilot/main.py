@@ -152,10 +152,10 @@ def analyze(
         pipeline = AnalysisPipeline()
     except AIError as e:
         console.print(f"\n[red]❌ {e}[/red]")
-        console.print("  Create a .env file with one of:")
-        console.print("  OPENCODE_API_KEY=your-key")
-        console.print("  GROQ_API_KEY=your-key")
-        console.print("  OPENAI_API_KEY=your-key")
+        console.print("  Create a .env file with:")
+        console.print("  AI_PROVIDER=stepfun")
+        console.print("  AI_API_KEY=your-key")
+        console.print("  AI_MODEL=step-3.7-flash")
         raise typer.Exit(1)
 
     # Only analyze tickets that have content (description or comments)
