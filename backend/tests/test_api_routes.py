@@ -2,11 +2,14 @@
 
 Uses in-memory stores (no database needed) and a test FastAPI app.
 """
+import asyncio
 import pytest
 from fastapi.testclient import TestClient
 from datetime import datetime
 
 from app.main import app
+from app.api.v1.projects import ProjectStore
+from app.services.jira import SprintStore
 
 
 client = TestClient(app)
@@ -23,6 +26,36 @@ AUTH_HEADER = {"Authorization": f"Bearer {_make_token()}"}
 WS2_HEADER = {"Authorization": f"Bearer {_make_token(workspace_id=2)}"}
 
 API_PREFIX = "/api/v1"
+
+
+def _seed_sprint(workspace_id: int = 1) -> dict:
+    """Create a project+sprint pair that passes workspace checks."""
+    project_id = ProjectStore._persist_next_id()
+    asyncio.run(ProjectStore._persist_add({
+        "id": project_id,
+        "name": "Test Project",
+        "jira_url": "https://example.atlassian.net",
+        "jira_email": "test@example.com",
+        "jira_api_token": "encrypted-token",
+        "jira_project_key": "TST",
+        "workspace_id": workspace_id,
+        "created_at": datetime.utcnow().isoformat(),
+    }))
+
+    sprint = {
+        "id": SprintStore._persist_next_id(),
+        "project_id": project_id,
+        "jira_sprint_id": 1001,
+        "name": "Seed Sprint",
+        "state": "active",
+        "started_at": None,
+        "ended_at": None,
+        "total_tickets": 0,
+        "analysis_status": "pending",
+        "imported_at": datetime.utcnow().isoformat(),
+    }
+    asyncio.run(SprintStore._persist_add(sprint))
+    return sprint
 
 
 class TestCodeSourceAPI:
@@ -178,16 +211,15 @@ class TestFigmaAPI:
             "figma_url": "https://google.com",
             "figma_token": "test-token",
         }, headers=AUTH_HEADER)
-        # Should fail with 400 — invalid Figma URL format
-        assert resp.status_code == 400
-        assert "Invalid Figma URL" in resp.json()["detail"]
+        # Request validation should reject non-Figma URLs before any real API call.
+        assert resp.status_code == 422
 
     def test_analyze_no_token(self):
         resp = client.post(f"{self.BASE}/analyze", json={
             "figma_url": "https://www.figma.com/file/abc123/Test",
             "figma_token": "",
         }, headers=AUTH_HEADER)
-        assert resp.status_code == 400  # Missing token
+        assert resp.status_code == 422
 
     def test_list_analyses_empty(self):
         resp = client.get(f"{self.BASE}/analyses", headers=AUTH_HEADER)
@@ -234,8 +266,9 @@ class TestTeamAPI:
     def test_share_report(self):
         # Upgrade workspace so sharing is allowed
         client.post(f"{self.BASE}/billing/upgrade", json={"tier": "pro"}, headers=AUTH_HEADER)
+        sprint = _seed_sprint()
         resp = client.post(f"{self.BASE}/share", json={
-            "sprint_id": 1, "title": "Test Report",
+            "sprint_id": sprint["id"], "title": "Test Report",
         }, headers=AUTH_HEADER)
         assert resp.status_code == 201
         data = resp.json()
@@ -255,8 +288,9 @@ class TestTeamAPI:
 
     def test_revoke_share(self):
         client.post(f"{self.BASE}/billing/upgrade", json={"tier": "pro"}, headers=AUTH_HEADER)
+        sprint = _seed_sprint()
         shared = client.post(f"{self.BASE}/share", json={
-            "sprint_id": 1, "title": "Revoke",
+            "sprint_id": sprint["id"], "title": "Revoke",
         }, headers=AUTH_HEADER).json()
 
         resp = client.delete(f"{self.BASE}/shared/{shared['id']}", headers=AUTH_HEADER)
@@ -287,10 +321,10 @@ class TestAuth:
 
     def test_login(self):
         client.post(f"{API_PREFIX}/auth/register", json={
-            "email": "login@test.com", "name": "Login", "password": "pass123",
+            "email": "login@test.com", "name": "Login", "password": "pass12345",
         })
         resp = client.post(f"{API_PREFIX}/auth/login", json={
-            "email": "login@test.com", "password": "pass123",
+            "email": "login@test.com", "password": "pass12345",
         })
         assert resp.status_code == 200
         assert "access_token" in resp.json()
@@ -304,11 +338,11 @@ class TestAuth:
     def test_get_me(self):
         # Register a real user first
         client.post(f"{API_PREFIX}/auth/register", json={
-            "email": "me@test.com", "name": "Me", "password": "pass123",
+            "email": "me@test.com", "name": "Me", "password": "pass12345",
         })
         # Login to get valid token
         login_resp = client.post(f"{API_PREFIX}/auth/login", json={
-            "email": "me@test.com", "password": "pass123",
+            "email": "me@test.com", "password": "pass12345",
         })
         token = login_resp.json()["access_token"]
         resp = client.get(f"{API_PREFIX}/auth/me", headers={"Authorization": f"Bearer {token}"})
