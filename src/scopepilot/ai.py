@@ -163,7 +163,8 @@ def create_provider() -> AIProvider:
     Priority:
     1. OPENCODE_API_KEY (OpenCode Go)
     2. GROQ_API_KEY (Groq)
-    3. OPENAI_API_KEY (OpenAI)
+    3. STEPFUN_API_KEY (StepFun)
+    4. OPENAI_API_KEY (OpenAI)
     """
     # OpenCode Go (default for current user)
     api_key = os.getenv("OPENCODE_API_KEY")
@@ -183,15 +184,25 @@ def create_provider() -> AIProvider:
             base_url="https://api.groq.com/openai/v1",
         )
 
-    # OpenAI
-    api_key = os.getenv("OPENAI_API_KEY")
+    # StepFun
+    api_key = os.getenv("STEPFUN_API_KEY")
     if api_key:
         return OpenAILikeProvider(
             api_key=api_key,
+            model=os.getenv("STEPFUN_MODEL", "step-1-8k"),
+            base_url=os.getenv("STEPFUN_BASE_URL", "https://api.stepfun.com/v1"),
+        )
+
+    # OpenAI
+    api_key = os.getenv("OPENAI_API_KEY")
+    if api_key:
+        base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        return OpenAILikeProvider(
+            api_key=api_key,
             model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-            base_url="https://api.openai.com/v1",
+            base_url=base_url,
         )
 
     raise AIError(
-        "No AI provider configured. Set OPENCODE_API_KEY, GROQ_API_KEY, or OPENAI_API_KEY in .env file."
+        "No AI provider configured. Set STEPFUN_API_KEY, OPENCODE_API_KEY, GROQ_API_KEY, or OPENAI_API_KEY in .env file."
     )

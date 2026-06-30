@@ -6,8 +6,7 @@
 import logging
 from typing import Optional
 
-from scopepilot.analyzer import AnalysisPipeline
-from scopepilot.ai import create_provider, AIError
+from ..adapters import create_analysis_pipeline
 
 from .jira import JiraService, _sprints
 
@@ -22,7 +21,7 @@ class AnalysisService:
     """AI 分析服务，对 Sprint 内的所有 Ticket 执行批量分析和 Sprint 摘要生成。"""
 
     @staticmethod
-    def analyze_sprint(sprint_id: int) -> dict:
+    async def analyze_sprint(sprint_id: int) -> dict:
         """对指定 sprint 运行 AI 分析管线。
 
         步骤:
@@ -55,9 +54,8 @@ class AnalysisService:
         _sprints[sprint_id]["analysis_status"] = "running"
 
         try:
-            # 2-3. 创建 provider 和 pipeline
-            provider = create_provider()
-            pipeline = AnalysisPipeline(provider=provider)
+            # 2-3. 通过 adapter 创建 pipeline
+            pipeline = create_analysis_pipeline()
 
             # 4. 批量分析 ticket
             logger.info(
@@ -80,9 +78,11 @@ class AnalysisService:
                 "ticket_analyses": [ta.to_dict() for ta in ticket_analyses],
             }
 
-            # 6. 持久化到内存 sprint 记录
+            # 6. 持久化到 sprint 记录
+            from ..services.jira import SprintStore
             _sprints[sprint_id]["analysis_data"] = analysis_data
             _sprints[sprint_id]["analysis_status"] = "done"
+            await SprintStore._persist_update(sprint_id, {"analysis_data": analysis_data, "analysis_status": "done"})
 
             return {
                 **sprint,
@@ -90,15 +90,12 @@ class AnalysisService:
                 "analysis_status": "done",
             }
 
-        except AIError as exc:
-            _sprints[sprint_id]["analysis_status"] = "failed"
-            logger.error("Sprint %d AI 分析失败: %s", sprint_id, exc)
-            raise AnalysisServiceError(f"AI 分析失败: {exc}") from exc
-
         except Exception as exc:
             _sprints[sprint_id]["analysis_status"] = "failed"
+            from ..services.jira import SprintStore
+            await SprintStore._persist_update(sprint_id, {"analysis_status": "failed"})
             logger.exception("Sprint %d 分析过程出现未预期错误", sprint_id)
-            raise AnalysisServiceError(f"分析失败: {exc}") from exc
+            raise AnalysisServiceError(str(exc)) from exc
 
     @staticmethod
     def get_analysis(sprint_id: int) -> Optional[dict]:

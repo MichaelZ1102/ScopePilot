@@ -262,10 +262,20 @@ Please analyze this ticket and return the structured JSON result."""
                     results_list = []
 
                 for j, td in enumerate(batch):
-                    if j < len(results_list) and isinstance(results_list[j], dict):
-                        result = results_list[j]
+                    # Match by ticket_key instead of by index (AI may reorder or skip)
+                    matched = None
+                    if isinstance(results_list, list):
+                        for r in results_list:
+                            if isinstance(r, dict) and r.get("ticket_key") == td["key"]:
+                                matched = r
+                                break
+                        # Fallback: if no key match and lengths match, use index
+                        if matched is None and j < len(results_list) and isinstance(results_list[j], dict):
+                            matched = results_list[j]
+
+                    if matched is not None:
                         all_results.append(_parse_ticket_result(
-                            td["key"], td["summary"], result
+                            td["key"], td["summary"], matched
                         ))
                     else:
                         all_results.append(TicketAnalysis(

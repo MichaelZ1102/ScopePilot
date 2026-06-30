@@ -15,6 +15,7 @@ from .jira_client import JiraClient, JiraConfig, JiraError, JiraAuthError
 from .analyzer import AnalysisPipeline
 from .ai import AIError
 from .report import save_reports
+from .codebase_scanner import scan_local_repository, CodebaseScanError
 
 app = typer.Typer(
     name="scopepilot",
@@ -165,25 +166,26 @@ def analyze(
     if empty_tickets:
         console.print(f"  [dim]Skipping {len(empty_tickets)} tickets without description or comments[/dim]")
 
-    ticket_analyses = []
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        task3 = progress.add_task("[yellow]🤖 Running AI analysis...", total=len(content_tickets))
-
-        for td in content_tickets:
-            progress.update(task3, description=f"[yellow]🤖 Analyzing {td['key']}...")
+    if content_tickets:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            progress.add_task("[yellow]🤖 Running AI analysis...", total=None)
+            # Use batch analysis (same path as web backend) for consistency
             try:
-                analysis = pipeline.analyze_ticket(td)
-                ticket_analyses.append(analysis)
+                ticket_analyses = pipeline.analyze_tickets_batch(content_tickets)
             except Exception as e:
-                console.print(f"\n  [red]⚠️ {td['key']} analysis failed: {e}[/red]")
-                ticket_analyses.append(None)
-            progress.update(task3, advance=1)
-
-        progress.update(task3, completed=True, description=f"[green]✅ Analysis complete[/green]")
+                console.print(f"\n  [red]⚠️ Batch analysis failed, falling back to per-ticket: {e}[/red]")
+                # Fallback: per-ticket analysis
+                ticket_analyses = []
+                for td in content_tickets:
+                    try:
+                        analysis = pipeline.analyze_ticket(td)
+                        ticket_analyses.append(analysis)
+                    except Exception as e2:
+                        console.print(f"\n  [red]⚠️ {td['key']} analysis failed: {e2}[/red]")
 
     # Filter out failed analyses and add empty placeholder for skipped tickets
     ticket_analyses = [ta for ta in ticket_analyses if ta is not None]
@@ -234,17 +236,62 @@ def login(
 
 
 @app.command()
-def connect_local(
+def scan_local(
     path: str = typer.Argument(..., help="Path to local project directory"),
+    branch: str = typer.Option(None, "--branch", "-b", help="Branch to scan (default: current)"),
+    max_files: int = typer.Option(5000, "--max-files", help="Maximum files to index"),
 ):
-    """Connect a local codebase project for code impact analysis."""
-    resolved = Path(path).resolve()
-    if not resolved.exists():
-        console.print(f"[red]❌ Path does not exist: {path}[/red]")
-        raise typer.Exit(1)
+    """Scan a local repository for code impact analysis."""
+    from rich.table import Table
+    from rich import box as rich_box
 
-    console.print(f"[green]✅ Connected local project: {resolved}[/green]")
-    console.print("[yellow]Codebase scanning coming in Phase 2.[/yellow]")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        progress.add_task(description="Scanning repository...", total=None)
+        try:
+            result = scan_local_repository(
+                path=path, branch=branch, max_files=max_files,
+            )
+        except CodebaseScanError as e:
+            console.print(f"[red]❌ {e}[/red]")
+            raise typer.Exit(1)
+
+    # Display results
+    console.print(f"\n[bold green]✅ Scan complete![/bold green]")
+    console.print(f"   📁 {result['total_files']} files")
+    console.print(f"   📄 ~{result['total_lines']} lines of code")
+    if result.get("is_git"):
+        console.print(f"   🌿 Branch: {result['branch']}")
+        console.print(f"   📌 Commit: {result['commit_sha'][:8] if result['commit_sha'] else 'N/A'}")
+        console.print(f"   🗂️  Git root: {result['git_root']}")
+
+    # Language breakdown table
+    if result.get("language_breakdown"):
+        lang_table = Table(
+            "Language", "Size", box=rich_box.SIMPLE,
+        )
+        sorted_langs = sorted(
+            result["language_breakdown"].items(),
+            key=lambda x: x[1], reverse=True,
+        )
+        for lang, bytes_count in sorted_langs:
+            size_str = f"{bytes_count / 1024:.1f} KB" if bytes_count > 1024 else f"{bytes_count} B"
+            lang_table.add_row(lang, size_str)
+        console.print(lang_table)
+
+    # Top directories
+    dirs = result.get("file_tree", {}).get("dirs", [])
+    if dirs:
+        console.print(f"\n[bold]📂 Top directories:[/bold]")
+        for d in dirs[:15]:
+            console.print(f"   📂 {d}")
+        if len(dirs) > 15:
+            console.print(f"   ... and {len(dirs) - 15} more")
+
+    return result
 
 
 @app.command()

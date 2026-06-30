@@ -42,7 +42,7 @@ async def import_sprint(
     project = _get_project(req.project_id, token_data)
 
     try:
-        result = JiraService.import_sprint(project, req.sprint_name)
+        result = await JiraService.import_sprint(project, req.sprint_name, ws_id)
     except JiraServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

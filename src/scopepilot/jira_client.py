@@ -282,7 +282,7 @@ class JiraClient:
                 if in_ac:
                     if line.strip().startswith("-") or line.strip().startswith("*"):
                         ac_list.append(line.strip("- *").strip())
-                    elif line.strip() and not line.startswith("#") and not in_ac:
+                    elif line.strip() and not line.startswith("#"):
                         break
 
         return ac_list

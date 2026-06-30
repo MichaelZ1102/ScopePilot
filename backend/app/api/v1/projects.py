@@ -1,45 +1,25 @@
 """Project management routes - CRUD + Jira config."""
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from typing import Optional
 
+from ...schemas import ProjectCreate, ProjectResponse, ProjectUpdate
 from ...services import get_current_user
+from ...database import SqliteStore
+from ...services.jira import JiraService
+from ...encryption import encrypt, decrypt
 
 router = APIRouter()
 
 
-# --- Schemas ---
-class ProjectCreate(BaseModel):
-    name: str
-    jira_url: str
-    jira_email: str
-    jira_api_token: str
-    jira_project_key: str
+# --- Persisted store ---
+class ProjectStore(SqliteStore):
+    _entity_name = "projects"
+    _store: dict[int, dict] = {}
+    _next_id: int = 1
 
 
-class ProjectUpdate(BaseModel):
-    name: Optional[str] = None
-    jira_url: Optional[str] = None
-    jira_email: Optional[str] = None
-    jira_api_token: Optional[str] = None
-    jira_project_key: Optional[str] = None
-
-
-class ProjectResponse(BaseModel):
-    id: int
-    name: str
-    jira_url: str
-    jira_project_key: str
-    workspace_id: int
-    created_at: str
-
-    class Config:
-        from_attributes = True
-
-
-# --- In-memory store ---
-_projects: dict[int, dict] = {}
-_next_id = 1
+_projects = ProjectStore._store
+_next_id = ProjectStore._next_id
 
 
 @router.get("/", response_model=list[ProjectResponse])
@@ -55,33 +35,30 @@ async def list_projects(token_data: dict = Depends(get_current_user)):
 @router.post("/", response_model=ProjectResponse, status_code=201)
 async def create_project(req: ProjectCreate, token_data: dict = Depends(get_current_user)):
     """Create a new project with Jira configuration."""
-    global _next_id
-
     ws_id = token_data.get("workspace_id")
     if not req.jira_url or not req.jira_email or not req.jira_api_token:
         raise HTTPException(status_code=400, detail="Jira configuration is required")
 
     project = {
-        "id": _next_id,
+        "id": ProjectStore._persist_next_id(),
         "name": req.name,
         "jira_url": req.jira_url.rstrip("/"),
         "jira_email": req.jira_email,
-        "jira_api_token": req.jira_api_token,
+        "jira_api_token": encrypt(req.jira_api_token),
         "jira_project_key": req.jira_project_key,
         "workspace_id": ws_id,
-        "created_at": "2026-06-25T00:00:00",
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    _projects[_next_id] = project
-    _next_id += 1
-
+    await ProjectStore._persist_add(project)
     return ProjectResponse(**project)
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(project_id: int, token_data: dict = Depends(get_current_user)):
     """Get project details."""
+    ws_id = token_data.get("workspace_id")
     project = _projects.get(project_id)
-    if not project:
+    if not project or project["workspace_id"] != ws_id:
         raise HTTPException(status_code=404, detail="Project not found")
     return ProjectResponse(**project)
 
@@ -92,18 +69,26 @@ async def update_project(
     token_data: dict = Depends(get_current_user),
 ):
     """Update project configuration."""
+    ws_id = token_data.get("workspace_id")
     project = _projects.get(project_id)
-    if not project:
+    if not project or project["workspace_id"] != ws_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
     update_data = req.model_dump(exclude_none=True)
+    if "jira_api_token" in update_data:
+        update_data["jira_api_token"] = encrypt(update_data["jira_api_token"])
     project.update(update_data)
+    await ProjectStore._persist_update(project_id, update_data)
     return ProjectResponse(**project)
 
 
 @router.delete("/{project_id}", status_code=204)
 async def delete_project(project_id: int, token_data: dict = Depends(get_current_user)):
-    """Delete a project."""
-    if project_id not in _projects:
+    """Delete a project and cascade-delete its sprints and tickets."""
+    ws_id = token_data.get("workspace_id")
+    project = _projects.get(project_id)
+    if not project or project["workspace_id"] != ws_id:
         raise HTTPException(status_code=404, detail="Project not found")
-    del _projects[project_id]
+    # Cascade delete sprints and tickets
+    await JiraService.delete_project_data(project_id)
+    await ProjectStore._persist_delete(project_id)

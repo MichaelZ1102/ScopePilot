@@ -1,15 +1,16 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { login, register } from '../lib/api'
 
-const styles = {
+const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'flex',
     minHeight: '100vh',
     alignItems: 'center',
     justifyContent: 'center',
     background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
-  } as React.CSSProperties,
+  },
   card: {
     background: '#1e1e38',
     borderRadius: 16,
@@ -17,29 +18,29 @@ const styles = {
     width: '100%',
     maxWidth: 420,
     boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-  } as React.CSSProperties,
+  },
   title: {
     fontSize: '1.75rem',
     fontWeight: 700,
     color: '#fff',
     textAlign: 'center',
     marginBottom: '0.5rem',
-  } as React.CSSProperties,
+  },
   subtitle: {
     color: '#888',
     textAlign: 'center',
     marginBottom: '2rem',
     fontSize: '0.9rem',
-  } as React.CSSProperties,
+  },
   inputGroup: {
     marginBottom: '1.25rem',
-  } as React.CSSProperties,
+  },
   label: {
     display: 'block',
     color: '#ccc',
     fontSize: '0.85rem',
     marginBottom: '0.4rem',
-  } as React.CSSProperties,
+  },
   input: {
     width: '100%',
     padding: '0.75rem 1rem',
@@ -50,7 +51,7 @@ const styles = {
     fontSize: '0.95rem',
     outline: 'none',
     boxSizing: 'border-box',
-  } as React.CSSProperties,
+  },
   button: {
     width: '100%',
     padding: '0.8rem',
@@ -62,7 +63,7 @@ const styles = {
     fontWeight: 600,
     cursor: 'pointer',
     marginTop: '0.5rem',
-  } as React.CSSProperties,
+  },
   error: {
     color: '#ff6b6b',
     fontSize: '0.85rem',
@@ -71,18 +72,19 @@ const styles = {
     padding: '0.5rem',
     background: 'rgba(255,107,107,0.1)',
     borderRadius: 6,
-  } as React.CSSProperties,
+  },
   toggle: {
     color: '#4fc3f7',
     cursor: 'pointer',
     textAlign: 'center',
     marginTop: '1rem',
     fontSize: '0.9rem',
-  } as React.CSSProperties,
+  },
 }
 
 export default function LoginPage() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const [isRegister, setIsRegister] = useState(false)
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
@@ -97,20 +99,17 @@ export default function LoginPage() {
 
     try {
       if (isRegister) {
-        const res = await register(email, name, password)
-        localStorage.setItem('token', res.access_token)
-        localStorage.setItem('user', JSON.stringify(res.user))
+        await register(email, name, password)
       } else {
-        const res = await login(email, password)
-        localStorage.setItem('token', res.access_token)
-        localStorage.setItem('user', JSON.stringify(res.user))
+        await login(email, password)
       }
+      // Token is set as HttpOnly cookie by the server — no localStorage needed
       navigate('/')
     } catch (err: unknown) {
       const msg =
         err && typeof err === 'object' && 'response' in err
-          ? ((err as { response: { data: { detail: string } } }).response?.data?.detail ?? '请求失败，请重试')
-          : '网络错误，请检查连接'
+          ? ((err as { response: { data: { detail: string } } }).response?.data?.detail ?? t('login.error_default'))
+          : t('login.error_network')
       setError(msg)
     } finally {
       setLoading(false)
@@ -120,53 +119,57 @@ export default function LoginPage() {
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-        <div style={styles.title}>🚀 ScopePilot</div>
-        <div style={styles.subtitle}>AI Sprint Analysis Platform</div>
+        <div style={styles.title}>{t('app.title')}</div>
+        <div style={styles.subtitle}>{t('login.subtitle')}</div>
 
         {error && <div style={styles.error}>{error}</div>}
 
         <form onSubmit={handleSubmit}>
           <div style={styles.inputGroup}>
-            <label style={styles.label}>邮箱</label>
+            <label style={styles.label}>{t('login.email')}</label>
             <input
               style={styles.input}
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="your@email.com"
+              placeholder={t('login.placeholder_email')}
               required
             />
           </div>
 
           {isRegister && (
             <div style={styles.inputGroup}>
-              <label style={styles.label}>名称</label>
+              <label style={styles.label}>{t('login.name')}</label>
               <input
                 style={styles.input}
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Your Name"
+                placeholder={t('login.placeholder_name')}
                 required
               />
             </div>
           )}
 
           <div style={styles.inputGroup}>
-            <label style={styles.label}>密码</label>
+            <label style={styles.label}>{t('login.password')}</label>
             <input
               style={styles.input}
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
+              placeholder={t('login.placeholder_password')}
               required
               minLength={4}
             />
           </div>
 
           <button style={styles.button} type="submit" disabled={loading}>
-            {loading ? '处理中...' : isRegister ? '注册' : '登录'}
+            {loading
+              ? t('login.loading')
+              : isRegister
+                ? t('login.submit_register')
+                : t('login.submit_login')}
           </button>
         </form>
 
@@ -177,7 +180,7 @@ export default function LoginPage() {
             setError('')
           }}
         >
-          {isRegister ? '已有账号？点击登录' : '没有账号？点击注册'}
+          {isRegister ? t('login.toggle_login') : t('login.toggle_register')}
         </div>
       </div>
     </div>

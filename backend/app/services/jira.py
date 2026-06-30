@@ -1,18 +1,32 @@
 """Jira service for importing sprints and tickets from Jira API.
 
 Uses scopepilot.jira_client (from scopepilot-cli package) to communicate
-with Jira. In-memory store for Phase 1, to be replaced by SQLAlchemy in Phase 2.
+with Jira. In-memory store persisted to local JSON via SqliteStore mixin.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from scopepilot.jira_client import JiraClient, JiraConfig, JiraError, JiraNotFoundError
+from ..database import SqliteStore
+from ..encryption import decrypt
 
-# ── In-memory store (Phase 1) ──────────────────────────────────────────────
-_sprints: dict[int, dict] = {}
-_tickets: dict[int, dict] = {}
-_next_sprint_id: int = 1
-_next_ticket_id: int = 1
+# ── In-memory store (persisted to JSON) ──────────────────────────────────
+
+
+class SprintStore(SqliteStore):
+    _entity_name = "sprints"
+    _store: dict[int, dict] = {}
+    _next_id: int = 1
+
+
+class TicketStore(SqliteStore):
+    _entity_name = "tickets"
+    _store: dict[int, dict] = {}
+    _next_id: int = 1
+
+
+_sprints = SprintStore._store
+_tickets = TicketStore._store
 
 
 class JiraServiceError(Exception):
@@ -22,7 +36,7 @@ class JiraServiceError(Exception):
 class JiraService:
     """Service-layer for Jira sprint import and retrieval."""
 
-    # ── Client factory ────────────────────────────────────────────────────
+    # ── Client factory ───────────────────────────────────────────────────
 
     @staticmethod
     def create_client(project: dict) -> JiraClient:
@@ -30,7 +44,7 @@ class JiraService:
         config = JiraConfig(
             url=project["jira_url"].rstrip("/"),
             email=project["jira_email"],
-            api_token=project["jira_api_token"],
+            api_token=decrypt(project["jira_api_token"]),
             project_key=project.get("jira_project_key"),
         )
         return JiraClient(config)
@@ -38,143 +52,127 @@ class JiraService:
     # ── Import ─────────────────────────────────────────────────────────────
 
     @classmethod
-    def import_sprint(
-        cls, project: dict, sprint_name_or_id: str
-    ) -> dict:
-        """Import a sprint (and its tickets) from Jira.
+    async def import_sprint(cls, project: dict, sprint_name: str, workspace_id: int = None) -> dict:
+        """Fetch a sprint + tickets from Jira and store internally.
 
         Args:
-            project: Project dict from the in-memory project store.
-            sprint_name_or_id: Sprint display name (fuzzy match) or numeric ID.
+            project: Project dict with jira config.
+            sprint_name: Sprint name to find.
+            workspace_id: If provided, validates project belongs to this workspace.
 
-        Returns:
-            Sprint dict with nested ``tickets`` list.
+        Raises:
+            JiraServiceError: If workspace_id is provided but doesn't match project.
         """
-        global _next_sprint_id, _next_ticket_id
+        if workspace_id is not None and project.get("workspace_id") != workspace_id:
+            raise JiraServiceError("Project does not belong to this workspace")
 
         client = cls.create_client(project)
 
-        try:
-            # Locate the sprint -------------------------------------------------
-            sprint = None
+        # 1. Fetch sprint data
+        sprint_data = client.find_sprint(sprint_name)
 
-            # 1. Try as a name (fuzzy match)
-            try:
-                sprint = client.find_sprint(sprint_name_or_id)
-            except JiraError:
-                pass
+        # 2. Fetch tickets
+        jira_tickets = client.get_sprint_issues(
+            sprint_data["id"],
+        )
 
-            # 2. Try as a numeric ID
-            if sprint is None:
-                try:
-                    sprint_id = int(sprint_name_or_id)
-                    sprint = client.get_sprint_by_id(sprint_id)
-                except (ValueError, TypeError):
-                    raise JiraServiceError(
-                        f"Sprint not found: {sprint_name_or_id!r}"
-                    )
-                except JiraNotFoundError:
-                    raise JiraServiceError(
-                        f"Sprint with id {sprint_name_or_id!r} does not exist"
-                    )
-                except JiraError as exc:
-                    raise JiraServiceError(str(exc))
+        # 3. Build internal sprint record
+        sprint_id = SprintStore._persist_next_id()
 
-            if sprint is None:
-                raise JiraServiceError(
-                    f"Sprint not found: {sprint_name_or_id!r}"
-                )
+        sprint = {
+            "id": sprint_id,
+            "project_id": project["id"],
+            "jira_sprint_id": sprint_data["id"],
+            "name": sprint_data["name"],
+            "state": sprint_data.get("state", "active"),
+            "started_at": sprint_data.get("startDate"),
+            "ended_at": sprint_data.get("endDate"),
+            "imported_at": datetime.now(timezone.utc).isoformat(),
+            "total_tickets": len(jira_tickets),
+            "analysis_status": "pending",
+            "analysis_data": None,
+        }
+        await SprintStore._persist_add(sprint)
 
-            # Fetch issues -------------------------------------------------------
-            issues_data = client.get_sprint_issues(sprint["id"])
-
-            # Build ticket records (sprint_id filled after sprint record) --------
-            ticket_records: list[dict] = []
-            for issue in issues_data:
-                td = client.extract_ticket_data(issue)
-                tid = _next_ticket_id
-                _next_ticket_id += 1
-                ticket_records.append(
-                    {
-                        "id": tid,
-                        "sprint_id": None,  # patched below
-                        "key": td["key"],
-                        "summary": td["summary"],
-                        "description": td["description"],
-                        "issue_type": td["issue_type"],
-                        "status": td["status"],
-                        "priority": td["priority"],
-                        "assignee": td["assignee"],
-                        "labels": td["labels"],
-                        "story_points": td["story_points"],
-                        "acceptance_criteria": td["acceptance_criteria"],
-                        "comments": td["comments"],
-                        "figma_links": td.get("figma_links", []),
-                        "created_at": datetime.utcnow().isoformat(),
-                    }
-                )
-
-            # Create sprint record -----------------------------------------------
-            now = datetime.utcnow().isoformat()
-            sid = _next_sprint_id
-            _next_sprint_id += 1
-
-            sprint_record: dict = {
-                "id": sid,
-                "project_id": project["id"],
-                "jira_sprint_id": sprint["id"],
-                "name": sprint.get("name", sprint_name_or_id),
-                "state": sprint.get("state", "active"),
-                "started_at": sprint.get("startDate"),
-                "ended_at": sprint.get("endDate"),
-                "imported_at": now,
-                "total_tickets": len(ticket_records),
-                "analysis_status": "pending",
+        # 4. Build internal ticket records
+        ticket_ids = []
+        for jt in jira_tickets:
+            tid = TicketStore._persist_next_id()
+            ticket = {
+                "id": tid,
+                "sprint_id": sprint_id,
+                "key": jt.get("key", ""),
+                "summary": jt.get("summary", ""),
+                "description": jt.get("description"),
+                "issue_type": jt.get("issue_type"),
+                "status": jt.get("status"),
+                "priority": jt.get("priority"),
+                "assignee": jt.get("assignee"),
+                "labels": jt.get("labels", []),
+                "story_points": jt.get("story_points"),
+                "acceptance_criteria": jt.get("acceptance_criteria", []),
+                "comments": jt.get("comments", []),
+                "figma_links": jt.get("figma_links", []),
                 "analysis_data": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            await TicketStore._persist_add(ticket)
+            ticket_ids.append(tid)
 
-            # Patch ticket sprint_ids
-            for t in ticket_records:
-                t["sprint_id"] = sid
+        sprint["ticket_ids"] = ticket_ids
+        return {**sprint, "tickets": [_tickets[tid] for tid in ticket_ids]}
 
-            # Persist
-            _sprints[sid] = sprint_record
-            for t in ticket_records:
-                _tickets[t["id"]] = t
+    # ── Retrieve ─────────────────────────────────────────────────────────
 
-        finally:
-            client.close()
-
-        return {**sprint_record, "tickets": ticket_records}
-
-    # ── Queries ────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def get_sprint(sprint_id: int) -> Optional[dict]:
-        """Return a sprint dict with its tickets, or *None*."""
+    @classmethod
+    def get_sprint(cls, sprint_id: int) -> Optional[dict]:
+        """Get a sprint with its tickets."""
         sprint = _sprints.get(sprint_id)
         if sprint is None:
             return None
-        tickets = [
-            t for t in _tickets.values() if t["sprint_id"] == sprint_id
-        ]
-        return {**sprint, "tickets": tickets}
+        ticket_ids = sprint.get("ticket_ids", [])
+        return {
+            **sprint,
+            "tickets": [_tickets.get(tid) for tid in ticket_ids if tid in _tickets],
+        }
 
-    @staticmethod
-    def list_sprints(project_id: int) -> list[dict]:
-        """Return all sprints belonging to a project."""
+    @classmethod
+    def list_sprints(cls, project_id: int) -> list[dict]:
+        """List sprints for a project."""
         return [
-            s for s in _sprints.values() if s["project_id"] == project_id
+            {"id": s["id"], "name": s["name"], "state": s["state"],
+             "total_tickets": s["total_tickets"], "analysis_status": s["analysis_status"],
+             "imported_at": s.get("imported_at")}
+            for s in _sprints.values()
+            if s["project_id"] == project_id
         ]
 
-    @staticmethod
-    def get_ticket(ticket_id: int) -> Optional[dict]:
-        """Return a single ticket dict, or *None*."""
+    @classmethod
+    def get_ticket(cls, ticket_id: int) -> Optional[dict]:
         return _tickets.get(ticket_id)
 
-    @staticmethod
-    def list_tickets(sprint_id: int) -> list[dict]:
-        """Return all tickets belonging to a sprint."""
-        return [
-            t for t in _tickets.values() if t["sprint_id"] == sprint_id
-        ]
+    @classmethod
+    def list_tickets(cls, sprint_id: int) -> list[dict]:
+        """List all tickets in a sprint."""
+        return [t for t in _tickets.values() if t.get("sprint_id") == sprint_id]
+
+    @classmethod
+    async def update_sprint(cls, sprint_id: int, updates: dict):
+        if sprint_id in _sprints:
+            await SprintStore._persist_update(sprint_id, updates)
+
+    @classmethod
+    async def update_ticket(cls, ticket_id: int, updates: dict):
+        if ticket_id in _tickets:
+            await TicketStore._persist_update(ticket_id, updates)
+
+    @classmethod
+    async def delete_project_data(cls, project_id: int):
+        """Delete all sprints and tickets belonging to a project (cascade)."""
+        sprint_ids = [s["id"] for s in _sprints.values() if s["project_id"] == project_id]
+        ticket_ids = [t["id"] for t in _tickets.values() if t["sprint_id"] in sprint_ids]
+        for tid in ticket_ids:
+            await TicketStore._persist_delete(tid)
+        for sid in sprint_ids:
+            await SprintStore._persist_delete(sid)
+        return len(sprint_ids), len(ticket_ids)

@@ -1,7 +1,7 @@
 """Pydantic schemas for API request/response validation."""
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # === Auth ===
@@ -25,8 +25,7 @@ class WorkspaceResponse(BaseModel):
     name: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # === User ===
@@ -43,8 +42,7 @@ class UserResponse(BaseModel):
     name: str
     role: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # === Project ===
@@ -63,8 +61,15 @@ class ProjectResponse(BaseModel):
     jira_project_key: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    jira_url: Optional[str] = None
+    jira_email: Optional[str] = None
+    jira_api_token: Optional[str] = None
+    jira_project_key: Optional[str] = None
 
 
 # === Sprint ===
@@ -81,8 +86,7 @@ class SprintResponse(BaseModel):
     analysis_status: str
     imported_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SprintDetailResponse(SprintResponse):
@@ -108,8 +112,7 @@ class TicketResponse(BaseModel):
     priority: Optional[str] = None
     assignee: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TicketDetailResponse(TicketResponse):
@@ -123,5 +126,60 @@ class TicketDetailResponse(TicketResponse):
     figma_links: Optional[list[str]] = None
     created_at: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+
+# === Code Source ===
+class CodeSourceCreate(BaseModel):
+    name: str
+    provider: str = "github"  # github, gitlab, bitbucket, local
+    repo_url: str
+    default_branch: str = "main"
+    access_token: str = ""
+
+
+class CodeSourceResponse(BaseModel):
+    id: int
+    name: str
+    provider: str
+    repo_url: str
+    default_branch: str
+    last_scanned_at: Optional[datetime] = None
+    scan_status: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CodeSourceDetailResponse(CodeSourceResponse):
+    project_id: Optional[int] = None
+    webhook_secret: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+# === Repo Snapshot ===
+class RepoSnapshotResponse(BaseModel):
+    id: int
+    code_source_id: int
+    branch: str
+    commit_sha: Optional[str] = None
+    file_tree: Optional[dict] = None
+    language_breakdown: Optional[dict] = None
+    total_files: int
+    total_lines: int
+    scanned_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# === Code Impact ===
+class CodeImpactResponse(BaseModel):
+    id: int
+    code_source_id: int
+    ticket_id: int
+    sprint_id: int
+    affected_files: Optional[list[dict]] = None
+    summary: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
