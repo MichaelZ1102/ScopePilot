@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  scopepilot:
+    build: .
+    container_name: scopepilot
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    environment:
+      - SECRET_KEY=${SECRET_KEY:?Please set SECRET_KEY}
+      - DEBUG=false
+      - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,http://localhost:8000}
+    volumes:
+      - scopepilot_data:/root/.scopepilot
+    restart: unless-stopped
+
+volumes:
+  scopepilot_data:

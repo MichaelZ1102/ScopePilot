@@ -84,7 +84,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ScopePilot",
-    version="0.5.0",
+    version="0.6.0",
     description="AI-powered Sprint Requirement Analysis Platform",
     lifespan=lifespan,
 )

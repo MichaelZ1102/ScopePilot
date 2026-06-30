@@ -21,8 +21,8 @@
 
 ```
 Backend:    Python 3.11+ / FastAPI / SQLite
-Frontend:   React 18 / TypeScript / Vite / react-i18next / TanStack Query
-AI:         OpenAI API / 规则驱动分析引擎
+Frontend:   React 19 / TypeScript / Vite / react-i18next / TanStack Query
+AI:         OpenCode Go / Groq / StepFun / OpenAI-compatible APIs
 CLI:        Python Typer / Jira API / Git
 Deploy:     Docker / docker-compose
 ```
@@ -46,24 +46,34 @@ cd ../frontend
 npm install
 ```
 
-### 2️⃣ 配置环境变量（可选）
+### 2️⃣ 配置环境变量
 
-创建 `backend/.env`：
+创建根目录 `.env`（Docker 部署使用）或 `backend/.env`（仅本地后端开发使用）。`SECRET_KEY` 必须设置；Jira 和 AI provider 按需要配置：
 
 ```env
-# ⚠️ 必须修改：生产部署时设置一个随机密钥
+# 必填：生产部署时设置一个随机密钥
 SECRET_KEY=your-random-secret-key-here
+COOKIE_SECURE=false
+CORS_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:8000
 
 # Jira（拉取 Sprint 时需要）
+JIRA_URL=https://your-domain.atlassian.net
 JIRA_EMAIL=your@email.com
 JIRA_API_TOKEN=your_jira_token
+JIRA_PROJECT_KEY=PROJ
 
-# GitHub（代码扫描时需要）
-GITHUB_TOKEN=your_github_token
+# AI provider（AI 分析/API 测试计划等增强功能至少配置一个）
+OPENCODE_API_KEY=your-opencode-api-key
+OPENCODE_MODEL=deepseek-v4-flash
+OPENCODE_BASE_URL=https://opencode.ai/zen/go/v1
 
-# OpenAI（增强 AI 分析，不配则用规则分析）
-OPENAI_API_KEY=sk-xxxx
+# 或：
+# GROQ_API_KEY=gsk_your-groq-key
+# STEPFUN_API_KEY=sk-your-stepfun-key
+# OPENAI_API_KEY=sk-your-openai-key
 ```
+
+GitHub 仓库访问 Token 在 Codebase 页面按代码源填写；Figma Token 在 Figma 分析页面填写，不需要全局环境变量。
 
 ### 3️⃣ 构建前端
 
@@ -242,7 +252,7 @@ MIT
 4. **前端迁移到 TanStack Query** — 将现有 `useEffect + fetch` 页面逐步迁移到 `lib/hooks.ts` 中的 `useQuery`/`useMutation`，获得缓存/重试/loading 状态
 5. **CSS 逐步替换** — 将 inline `style={{...}}` 替换为 `global.css` 中的 `.card`/`.btn` 类
 6. **补全 i18n 翻译** — 在 `i18n.ts` 中补充剩余页面中的硬编码中文文本
-7. **集成测试 CI** — 添加 GitHub Actions 工作流自动运行测试
+7. **观察 CI 回归** — 推送后查看 GitHub Actions 的 backend/frontend 结果并修复失败项
 
 ### 🥉 长期（1-3 月）
 

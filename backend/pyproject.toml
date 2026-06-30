@@ -1,6 +1,6 @@
 [project]
 name = "scopepilot-backend"
-version = "0.5.0"
+version = "0.6.0"
 description = "ScopePilot Web Backend API"
 requires-python = ">=3.11"
 dependencies = [

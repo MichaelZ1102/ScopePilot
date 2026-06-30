@@ -26,3 +26,16 @@ Thumbs.db
 
 # Reports
 reports/
+
+# Documentation
+!docs/
+!docs/**/*.md
+
+# GitHub Actions
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+!.github/workflows/*.yaml
+
+# Deployment config
+!docker-compose.yml
