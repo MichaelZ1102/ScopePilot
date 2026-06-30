@@ -62,8 +62,14 @@ def decode_access_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
-def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
-    """Dependency: extract and validate current user from Bearer token."""
+def get_current_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Dependency: extract and validate current user from cookie or Bearer token."""
+    token = request.cookies.get(COOKIE_NAME)
+    if token:
+        return decode_access_token(token)
     if credentials is not None:
         return decode_access_token(credentials.credentials)
     raise HTTPException(status_code=401, detail="Not authenticated")
