@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { login, register } from '../lib/api'
+import { useAuth } from '../lib/AuthContext'
 import { getApiErrorMessage } from '../lib/client'
 
 const styles: Record<string, React.CSSProperties> = {
@@ -86,6 +87,7 @@ const styles: Record<string, React.CSSProperties> = {
 export default function LoginPage() {
   const navigate = useNavigate()
   const { t } = useTranslation()
+  const { checkAuth } = useAuth()
   const [isRegister, setIsRegister] = useState(false)
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
@@ -105,6 +107,7 @@ export default function LoginPage() {
         await login(email, password)
       }
       // Token is set as HttpOnly cookie by the server — no localStorage needed
+      await checkAuth()
       navigate('/')
     } catch (err: unknown) {
       setError(getApiErrorMessage(err, t('login.error_network')))
