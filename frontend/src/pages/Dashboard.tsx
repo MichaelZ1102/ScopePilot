@@ -1,67 +1,72 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useTranslation } from 'react-i18next'
-import { listProjects, listSprints, importSprint, type Project, type Sprint } from '../lib/api'
-import { getApiErrorMessage } from '../lib/client'
+import {
+  ArrowRight,
+  Braces,
+  CheckCircle2,
+  ChevronRight,
+  FileSearch,
+  FileText,
+  FolderKanban,
+  Import,
+  LoaderCircle,
+  PenTool,
+  Plus,
+  ScanSearch,
+  Sparkles,
+  TestTube2,
+  X,
+} from 'lucide-react'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const styles: any = {
-  page: { maxWidth: 1100, margin: '0 auto' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' },
-  title: { fontSize: '1.5rem', fontWeight: 700, color: '#1a1a2e' },
-  statsRow: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '2rem' },
-  statCard: (color: string): React.CSSProperties => ({
-    background: '#fff', borderRadius: 10, padding: '1.25rem',
-    borderLeft: `4px solid ${color}`, boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
-  }),
-  statLabel: { color: '#666', fontSize: '0.85rem', marginBottom: '0.25rem' },
-  statValue: { fontSize: '1.75rem', fontWeight: 700, color: '#1a1a2e' },
-  sectionTitle: { fontSize: '1.1rem', fontWeight: 600, color: '#1a1a2e', marginBottom: '1rem' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' },
-  card: { background: '#fff', borderRadius: 10, padding: '1.25rem', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', border: '1px solid #eee' },
-  cardTitle: { fontSize: '1.1rem', fontWeight: 600, color: '#1a1a2e', marginBottom: '0.5rem' },
-  cardText: { fontSize: '0.85rem', color: '#888', marginBottom: '0.25rem' },
-  cardActions: { display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' as const },
-  btn: { padding: '0.45rem 1rem', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 500, color: '#fff' },
-  btnPrimary: { background: '#4fc3f7' },
-  btnDark: { background: '#1a1a2e' },
-  btnOutline: { background: 'transparent', border: '1px solid #1a1a2e', color: '#1a1a2e' },
-  empty: { textAlign: 'center' as const, color: '#888', padding: '2rem', background: '#fff', borderRadius: 10 },
-  sprintItem: { padding: '0.5rem 0', borderBottom: '1px solid #f0f0f0', fontSize: '0.85rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  modalOverlay: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 },
-  modal: { background: '#fff', borderRadius: 12, padding: '2rem', width: '100%', maxWidth: 440, boxShadow: '0 8px 32px rgba(0,0,0,0.2)' },
-  modalTitle: { fontSize: '1.2rem', fontWeight: 600, marginBottom: '1rem', color: '#1a1a2e' },
-  input: { width: '100%', padding: '0.65rem 0.85rem', borderRadius: 6, border: '1px solid #ddd', fontSize: '0.9rem', marginBottom: '1rem', boxSizing: 'border-box' as const },
-  modalActions: { display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' as const },
-  badge: (state: string): React.CSSProperties => {
-    const colors: Record<string, string> = { active: '#81c784', closed: '#90a4ae', future: '#4fc3f7' }
-    return { background: colors[state] || '#eee', color: '#fff', padding: '0.15rem 0.5rem', borderRadius: 10, fontSize: '0.75rem' }
-  },
-}
+import {
+  importSprint,
+  listProjects,
+  listSprints,
+  type Project,
+  type Sprint,
+} from '../lib/api'
+import { getApiErrorMessage } from '../lib/client'
+import './DashboardWorkspace.css'
+
+const workflowSteps = [
+  { icon: FolderKanban, title: '连接 Jira 项目', description: '保存项目与 Jira 访问配置' },
+  { icon: Import, title: '导入 Sprint', description: '同步 Ticket、描述与验收标准' },
+  { icon: Sparkles, title: '运行 AI 分析', description: '提炼需求并识别实现影响' },
+  { icon: FileText, title: '生成分析报告', description: '核对结果并分享给团队' },
+]
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { t } = useTranslation()
   const [projects, setProjects] = useState<Project[]>([])
   const [sprintsMap, setSprintsMap] = useState<Record<number, Sprint[]>>({})
   const [loading, setLoading] = useState(true)
   const [importProject, setImportProject] = useState<Project | null>(null)
   const [sprintName, setSprintName] = useState('')
   const [importing, setImporting] = useState(false)
+  const [error, setError] = useState('')
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => {
+    loadData()
+  }, [])
 
   async function loadData() {
+    setLoading(true)
+    setError('')
     try {
-      const projs = await listProjects()
-      setProjects(projs)
-      const sm: Record<number, Sprint[]> = {}
-      for (const p of projs) {
-        try { sm[p.id] = await listSprints(p.id) } catch { sm[p.id] = [] }
-      }
-      setSprintsMap(sm)
-    } catch {
-      // not authenticated
+      const loadedProjects = await listProjects()
+      setProjects(loadedProjects)
+      const entries = await Promise.all(
+        loadedProjects.map(async (project) => {
+          try {
+            return [project.id, await listSprints(project.id)] as const
+          } catch {
+            return [project.id, []] as const
+          }
+        }),
+      )
+      setSprintsMap(Object.fromEntries(entries))
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, '仪表盘数据加载失败。'))
     } finally {
       setLoading(false)
     }
@@ -70,113 +75,161 @@ export default function Dashboard() {
   async function handleImport() {
     if (!importProject || !sprintName.trim()) return
     setImporting(true)
+    setError('')
     try {
       const sprint = await importSprint(importProject.id, sprintName.trim())
       setImportProject(null)
       setSprintName('')
       navigate(`/sprint/${sprint.id}`)
-    } catch (err: unknown) {
-      alert(getApiErrorMessage(err, t('dashboard.import_failed')))
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, 'Sprint 导入失败。'))
     } finally {
       setImporting(false)
     }
   }
 
-  const totalSprints = Object.values(sprintsMap).reduce((sum, s) => sum + s.length, 0)
-  const totalTickets = Object.values(sprintsMap).reduce((sum, s) => sum + s.reduce((t, sp) => t + sp.total_tickets, 0), 0)
-  const activeSprints = Object.values(sprintsMap).reduce((sum, s) => sum + s.filter((sp) => sp.state === 'active').length, 0)
+  const allSprints = useMemo(
+    () => Object.values(sprintsMap).flat(),
+    [sprintsMap],
+  )
+  const activeSprints = allSprints.filter((sprint) => sprint.state === 'active').length
+  const analyzedSprints = allSprints.filter((sprint) => sprint.analysis_status === 'done').length
+  const totalTickets = allSprints.reduce((sum, sprint) => sum + sprint.total_tickets, 0)
 
   if (loading) {
-    return <div style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>{t('dashboard.loading')}</div>
+    return (
+      <div className="dashboard-loading">
+        <LoaderCircle className="spin" size={23} />
+        <span>正在加载分析主页...</span>
+      </div>
+    )
   }
 
   return (
-    <div style={styles.page}>
-      <div style={styles.header}>
-        <h2 style={styles.title}>{t('dashboard.title')}</h2>
-      </div>
+    <div className="dashboard-workspace">
+      <header className="dashboard-header">
+        <div>
+          <span className="dashboard-eyebrow">ScopePilot Workspace</span>
+          <h1>分析主页</h1>
+          <p>从 Jira Sprint 到需求、代码、API 与设计影响的一站式分析。</p>
+        </div>
+        <button className="button button-primary" type="button" onClick={() => navigate('/projects')}>
+          <Plus size={17} />
+          创建项目
+        </button>
+      </header>
 
-      <div style={styles.statsRow}>
-        <div style={styles.statCard('#4fc3f7')}>
-          <div style={styles.statLabel}>{t('dashboard.stats_active_sprints')}</div>
-          <div style={styles.statValue}>{activeSprints}</div>
-        </div>
-        <div style={styles.statCard('#81c784')}>
-          <div style={styles.statLabel}>{t('dashboard.stats_total_tickets')}</div>
-          <div style={styles.statValue}>{totalTickets}</div>
-        </div>
-        <div style={styles.statCard('#ffb74d')}>
-          <div style={styles.statLabel}>{t('dashboard.stats_projects')}</div>
-          <div style={styles.statValue}>{projects.length}</div>
-        </div>
-        <div style={styles.statCard('#ba68c8')}>
-          <div style={styles.statLabel}>{t('dashboard.stats_sprints')}</div>
-          <div style={styles.statValue}>{totalSprints}</div>
-        </div>
-      </div>
-
-      <h3 style={styles.sectionTitle}>{t('dashboard.section_overview')}</h3>
-
-      {projects.length === 0 ? (
-        <div style={styles.empty}>
-          <p style={{ marginBottom: '0.5rem' }}>{t('dashboard.no_projects')}</p>
-          <button style={{ ...styles.btn, ...styles.btnPrimary }} onClick={() => navigate('/projects')}>
-            {t('dashboard.create_project_btn')}
-          </button>
-        </div>
-      ) : (
-        <div style={styles.grid}>
-          {projects.map((p) => {
-            const sprints = sprintsMap[p.id] || []
-            return (
-              <div key={p.id} style={styles.card}>
-                <div style={styles.cardTitle}>{p.name}</div>
-                <div style={styles.cardText}>{t('dashboard.label_key')}: {p.jira_project_key}</div>
-                <div style={styles.cardText}>{t('dashboard.label_sprints')}: {sprints.length}</div>
-                <div style={{ marginTop: '0.5rem' }}>
-                  {sprints.slice(-3).map((sp) => (
-                    <div key={sp.id} style={styles.sprintItem} onClick={() => navigate(`/sprint/${sp.id}`)}>
-                      <span>{sp.name}</span>
-                      <span style={styles.badge(sp.state)}>{sp.state}</span>
-                    </div>
-                  ))}
-                </div>
-                <div style={styles.cardActions}>
-                  <button style={{ ...styles.btn, ...styles.btnDark }} onClick={() => navigate(`/sprint/${p.id}`)}>
-                    {t('dashboard.view_sprints')}
-                  </button>
-                  <button style={{ ...styles.btn, ...styles.btnPrimary }} onClick={() => { setImportProject(p); setSprintName('') }}>
-                    {t('dashboard.import_sprint')}
-                  </button>
-                </div>
-              </div>
-            )
-          })}
+      {error && (
+        <div className="dashboard-error">
+          <span>{error}</span>
+          <button type="button" onClick={() => setError('')}>关闭</button>
         </div>
       )}
 
-      {importProject && (
-        <div style={styles.modalOverlay} onClick={() => setImportProject(null)}>
-          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <div style={styles.modalTitle}>{t('dashboard.import_title')}</div>
-            <p style={{ fontSize: '0.9rem', color: '#666', marginBottom: '1rem' }}>
-              {t('dashboard.import_project_label')}: {importProject.name}
-            </p>
-            <input
-              style={styles.input}
-              type="text"
-              placeholder={t('dashboard.import_placeholder')}
-              value={sprintName}
-              onChange={(e) => setSprintName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleImport()}
-              autoFocus
-            />
-            <div style={styles.modalActions}>
-              <button style={{ ...styles.btn, background: '#ccc', color: '#333' }} onClick={() => setImportProject(null)}>
-                {t('dashboard.import_cancel')}
+      {projects.length === 0 ? (
+        <EmptyDashboard onCreate={() => navigate('/projects')} />
+      ) : (
+        <>
+          <section className="dashboard-metrics" aria-label="Workspace metrics">
+            <Metric label="项目" value={projects.length} detail="已连接 Jira" icon={FolderKanban} />
+            <Metric label="活跃 Sprint" value={activeSprints} detail={`共 ${allSprints.length} 个 Sprint`} icon={ScanSearch} />
+            <Metric label="Ticket" value={totalTickets} detail="已同步到工作区" icon={FileSearch} />
+            <Metric label="已完成分析" value={analyzedSprints} detail="可生成报告" icon={CheckCircle2} />
+          </section>
+
+          <section className="dashboard-section">
+            <div className="dashboard-section-header">
+              <div>
+                <h2>项目与 Sprint</h2>
+                <p>选择 Sprint 进入单票分析工作台，或从 Jira 导入新的 Sprint。</p>
+              </div>
+              <button className="text-button" type="button" onClick={() => navigate('/projects')}>
+                管理项目 <ArrowRight size={15} />
               </button>
-              <button style={{ ...styles.btn, ...styles.btnPrimary }} onClick={handleImport} disabled={importing || !sprintName.trim()}>
-                {importing ? t('dashboard.importing') : t('dashboard.import_confirm')}
+            </div>
+
+            <div className="project-list">
+              <div className="project-list-heading" aria-hidden="true">
+                <span>项目</span>
+                <span>Jira Key</span>
+                <span>Sprint</span>
+                <span>最近状态</span>
+                <span>操作</span>
+              </div>
+              {projects.map((project) => {
+                const sprints = sprintsMap[project.id] || []
+                const latestSprint = sprints[sprints.length - 1]
+                return (
+                  <div className="project-row" key={project.id}>
+                    <div className="project-name">
+                      <span><FolderKanban size={18} /></span>
+                      <strong>{project.name}</strong>
+                    </div>
+                    <code>{project.jira_project_key}</code>
+                    <span>{sprints.length}</span>
+                    <span className={`sprint-state is-${latestSprint?.analysis_status || 'pending'}`}>
+                      {latestSprint ? analysisLabel(latestSprint.analysis_status) : '尚未导入'}
+                    </span>
+                    <div className="project-actions">
+                      {latestSprint && (
+                        <button className="button button-secondary" type="button" onClick={() => navigate(`/sprint/${latestSprint.id}`)}>
+                          继续分析 <ChevronRight size={15} />
+                        </button>
+                      )}
+                      <button className="button button-primary" type="button" onClick={() => { setImportProject(project); setSprintName('') }}>
+                        <Import size={15} /> 导入 Sprint
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+
+          <section className="dashboard-section source-overview">
+            <div className="dashboard-section-header">
+              <div>
+                <h2>影响分析数据源</h2>
+                <p>按需连接代码、接口与设计数据，为 Ticket 分析补充证据。</p>
+              </div>
+            </div>
+            <div className="source-links">
+              <SourceLink icon={Braces} title="Codebase" description="扫描仓库并定位受影响文件" onClick={() => navigate('/code-sources')} />
+              <SourceLink icon={TestTube2} title="API 测试" description="导入 OpenAPI 并生成测试计划" onClick={() => navigate('/api-test-plans')} />
+              <SourceLink icon={PenTool} title="Figma" description="分析设计稿与后端实现影响" onClick={() => navigate('/figma-designs')} />
+            </div>
+          </section>
+        </>
+      )}
+
+      {importProject && (
+        <div className="dashboard-modal-backdrop" role="presentation" onMouseDown={() => setImportProject(null)}>
+          <div className="dashboard-modal" role="dialog" aria-modal="true" aria-labelledby="import-sprint-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="dashboard-modal-header">
+              <div>
+                <h2 id="import-sprint-title">导入 Sprint</h2>
+                <p>从 {importProject.name} 的 Jira 项目同步 Sprint 与 Ticket。</p>
+              </div>
+              <button className="icon-button" type="button" aria-label="关闭" title="关闭" onClick={() => setImportProject(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <label className="dashboard-field">
+              <span>Sprint 名称</span>
+              <input
+                type="text"
+                placeholder="例如：LPRO Sprint 0707"
+                value={sprintName}
+                onChange={(event) => setSprintName(event.target.value)}
+                onKeyDown={(event) => event.key === 'Enter' && handleImport()}
+                autoFocus
+              />
+            </label>
+            <div className="dashboard-modal-actions">
+              <button className="button button-secondary" type="button" onClick={() => setImportProject(null)}>取消</button>
+              <button className="button button-primary" type="button" onClick={handleImport} disabled={importing || !sprintName.trim()}>
+                {importing ? <LoaderCircle className="spin" size={16} /> : <Import size={16} />}
+                {importing ? '正在导入' : '导入 Sprint'}
               </button>
             </div>
           </div>
@@ -184,4 +237,89 @@ export default function Dashboard() {
       )}
     </div>
   )
+}
+
+function EmptyDashboard({ onCreate }: { onCreate: () => void }) {
+  return (
+    <section className="dashboard-empty">
+      <div className="empty-intro">
+        <span className="empty-icon"><ScanSearch size={25} /></span>
+        <div>
+          <span className="dashboard-eyebrow">开始使用 ScopePilot</span>
+          <h2>完成第一次 Sprint 影响分析</h2>
+          <p>先连接 Jira 项目，然后导入 Sprint。ScopePilot 会按 Ticket 提炼需求，并关联代码、API 与设计影响。</p>
+        </div>
+        <button className="button button-primary empty-primary-action" type="button" onClick={onCreate}>
+          <Plus size={17} />
+          创建并连接项目
+        </button>
+      </div>
+
+      <div className="workflow-steps">
+        {workflowSteps.map(({ icon: Icon, title, description }, index) => (
+          <div className="workflow-step" key={title}>
+            <div className="workflow-step-top">
+              <span className="workflow-step-icon"><Icon size={19} /></span>
+              <span className="workflow-step-number">0{index + 1}</span>
+            </div>
+            <strong>{title}</strong>
+            <p>{description}</p>
+            {index < workflowSteps.length - 1 && <ChevronRight className="workflow-arrow" size={17} />}
+          </div>
+        ))}
+      </div>
+
+      <div className="empty-footer">
+        <span>已有项目？</span>
+        <button type="button" onClick={onCreate}>前往项目页配置 Jira <ArrowRight size={15} /></button>
+      </div>
+    </section>
+  )
+}
+
+function Metric({ label, value, detail, icon: Icon }: {
+  label: string
+  value: number
+  detail: string
+  icon: typeof FolderKanban
+}) {
+  return (
+    <div className="dashboard-metric">
+      <span className="metric-icon"><Icon size={18} /></span>
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+        <small>{detail}</small>
+      </div>
+    </div>
+  )
+}
+
+function SourceLink({ icon: Icon, title, description, onClick }: {
+  icon: typeof Braces
+  title: string
+  description: string
+  onClick: () => void
+}) {
+  return (
+    <button className="source-link" type="button" onClick={onClick}>
+      <span><Icon size={19} /></span>
+      <div>
+        <strong>{title}</strong>
+        <p>{description}</p>
+      </div>
+      <ChevronRight size={17} />
+    </button>
+  )
+}
+
+function analysisLabel(status: string) {
+  const labels: Record<string, string> = {
+    done: '分析完成',
+    running: '分析中',
+    partial: '部分完成',
+    failed: '分析失败',
+    pending: '待分析',
+  }
+  return labels[status] || status
 }

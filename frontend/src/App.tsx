@@ -1,5 +1,6 @@
 import { type ReactNode } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { LoaderCircle } from 'lucide-react'
 import { useAuth } from './lib/AuthContext'
 import Layout from './components/Layout'
 import LoginPage from './components/LoginPage'
@@ -15,7 +16,14 @@ import SharedReportPage from './pages/SharedReportPage'
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const { isLoggedIn, isLoading } = useAuth()
 
-  if (isLoading) return <div style={{display:'flex',justifyContent:'center',alignItems:'center',height:'100vh',color:'#888'}}>Checking session...</div>
+  if (isLoading) {
+    return (
+      <div className="loading-state" style={{ minHeight: '100vh', border: 0, borderRadius: 0 }}>
+        <span className="loading-state-icon"><LoaderCircle className="spin" size={22} /></span>
+        <p>正在检查登录状态...</p>
+      </div>
+    )
+  }
   if (!isLoggedIn) return <Navigate to="/login" replace />
   return <>{children}</>
 }

@@ -11,13 +11,30 @@ export interface Sprint {
   id: number; name: string; state: string; total_tickets: number; analysis_status: string; imported_at?: string
 }
 export interface SprintDetail extends Sprint {
-  project_id: number; jira_sprint_id: number; started_at?: string; ended_at?: string; tickets: TicketDetail[]
+  project_id: number; jira_sprint_id: number; started_at?: string; ended_at?: string; tickets: TicketDetail[]; analysis_data?: SprintAnalysisData | null
 }
 export interface Ticket {
   id: number; key: string; summary: string; issue_type?: string; status?: string; priority?: string; assignee?: string
 }
 export interface TicketDetail extends Ticket {
-  sprint_id: number; description?: string; labels?: string[]; story_points?: number; acceptance_criteria?: string[]; comments?: Record<string, unknown>[]; figma_links?: string[]; created_at?: string
+  sprint_id: number; description?: string; labels?: string[]; story_points?: number; acceptance_criteria?: string[]; comments?: Record<string, unknown>[]; figma_links?: string[]; analysis_data?: TicketAnalysis | null; report_included?: boolean; created_at?: string
+}
+export interface TicketAnalysis {
+  ticket_key: string; summary: string; business_goal: string; acceptance_criteria_summary: string
+  backend_features: string[]; api_candidates: string[]; db_changes: string[]
+  permission_rules: string[]; state_transitions: string[]; validation_rules: string[]
+  external_dependencies: string[]; open_questions: string[]
+  score: Record<string, unknown>; code_impact: Record<string, unknown>
+  implementation_plan: string[]; api_tests: Array<Record<string, unknown> | string>
+  comments: Record<string, unknown>[]
+}
+export interface SprintAnalysisData {
+  sprint_analysis: {
+    sprint_name: string; total_tickets: number; summary: string
+    risk_map: Record<string, unknown>[]; open_questions: string[]
+    suggested_execution_order: string[]
+  }
+  ticket_analyses: TicketAnalysis[]
 }
 export interface CodeSource {
   id: number; name: string; provider: string; repo_url: string; default_branch: string; last_scanned_at: string | null; scan_status: string; created_at: string

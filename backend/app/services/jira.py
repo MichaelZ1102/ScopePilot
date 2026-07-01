@@ -120,6 +120,7 @@ class JiraService:
                 "comments": jt.get("comments", []),
                 "figma_links": jt.get("figma_links", []),
                 "analysis_data": None,
+                "report_included": True,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await TicketStore._persist_add(ticket)

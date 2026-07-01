@@ -137,6 +137,8 @@ class TicketDetailResponse(TicketResponse):
     acceptance_criteria: Optional[list[str]] = None
     comments: Optional[list[dict]] = None
     figma_links: Optional[list[str]] = None
+    analysis_data: Optional[dict] = None
+    report_included: bool = True
     created_at: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)

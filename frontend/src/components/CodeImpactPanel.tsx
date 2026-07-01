@@ -1,27 +1,13 @@
-import { useState } from 'react'
-import { listCodeSources, analyzeCodeImpact, type CodeSource, type CodeImpact } from '../lib/api'
+import { useEffect, useState } from 'react'
+import { Code2, FileCode2, LoaderCircle, RefreshCw, X } from 'lucide-react'
 
-const styles: any = {
-  container: { marginTop: '0.75rem' },
-  btn: { padding: '0.35rem 0.8rem', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '0.8rem', fontWeight: 500, color: '#fff', background: '#1a1a2e' },
-  btnSmall: { padding: '0.25rem 0.6rem', fontSize: '0.75rem' },
-  impactBox: { background: '#fff', borderRadius: 8, padding: '0.75rem 1rem', marginTop: '0.5rem', border: '1px solid #e8ecf4' },
-  summary: { fontSize: '0.85rem', color: '#333', lineHeight: 1.5, marginBottom: '0.5rem' },
-  fileRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.3rem 0', borderBottom: '1px solid #f0f0f0', fontSize: '0.8rem' },
-  filePath: { fontFamily: 'monospace', fontSize: '0.78rem', color: '#1a1a2e' },
-  changeTag: (type: string) => {
-    const colors: Record<string, string> = { modify: '#4fc3f7', create: '#81c784', test: '#ffb74d', config: '#ba68c8' }
-    return { background: colors[type] || '#eee', color: '#fff', padding: '0.1rem 0.4rem', borderRadius: 4, fontSize: '0.7rem' }
-  },
-  confBar: (conf: number) => ({
-    width: `${conf * 100}%`,
-    height: 4,
-    background: conf > 0.7 ? '#81c784' : conf > 0.4 ? '#ffb74d' : '#e74c3c',
-    borderRadius: 2,
-    marginLeft: '0.5rem',
-  }),
-  noData: { fontSize: '0.8rem', color: '#888', padding: '0.5rem 0' },
-}
+import {
+  analyzeCodeImpact,
+  getTicketCodeImpact,
+  listCodeSources,
+  type CodeImpact,
+  type CodeSource,
+} from '../lib/api'
 
 interface Props {
   ticketId: number
@@ -35,110 +21,120 @@ export default function CodeImpactPanel({ ticketId, sprintId, summary, descripti
   const [impact, setImpact] = useState<CodeImpact | null>(null)
   const [loading, setLoading] = useState(false)
   const [showSources, setShowSources] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setImpact(null)
+    setError('')
+    getTicketCodeImpact(ticketId)
+      .then(setImpact)
+      .catch(() => undefined)
+  }, [ticketId])
 
   async function handleAnalyze(sourceId: number) {
     setLoading(true)
     setShowSources(false)
+    setError('')
     try {
-      const result = await analyzeCodeImpact(sourceId, ticketId, sprintId, summary, description)
+      const result = await analyzeCodeImpact(
+        sourceId,
+        ticketId,
+        sprintId,
+        summary,
+        description,
+      )
       setImpact(result)
     } catch {
-      alert('分析失败')
+      setError('代码影响分析失败，请检查代码源是否已完成扫描。')
     } finally {
       setLoading(false)
     }
   }
 
-  async function loadSources() {
+  async function openSourcePicker() {
+    setError('')
     try {
-      const srcs = await listCodeSources()
-      setSources(srcs)
+      setSources(await listCodeSources())
       setShowSources(true)
     } catch {
-      alert('加载代码源失败')
+      setError('代码源加载失败。')
     }
   }
 
   return (
-    <div style={styles.container}>
+    <section className="analysis-section code-impact-panel">
+      <div className="analysis-section-heading">
+        <span className="analysis-section-icon"><Code2 size={20} /></span>
+        <div>
+          <h3>代码影响</h3>
+          <p>根据 Ticket 内容定位可能需要修改的文件和模块。</p>
+        </div>
+        <button className="button button-secondary section-action" type="button" onClick={openSourcePicker} disabled={loading}>
+          {loading ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
+          {impact ? '重新分析' : '选择代码源分析'}
+        </button>
+      </div>
+
+      {error && <div className="inline-error">{error}</div>}
+
       {impact ? (
-        <div style={styles.impactBox}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-            <strong style={{ fontSize: '0.85rem', color: '#1a1a2e' }}>🔍 Code Impact</strong>
-            <button style={{ ...styles.btn, ...styles.btnSmall }} onClick={loadSources}>重新分析</button>
+        <div className="impact-content">
+          <p className="impact-summary">{impact.summary}</p>
+          <div className="impact-file-list">
+            {(impact.affected_files || []).map((file) => (
+              <div className="impact-file-row" key={`${file.path}-${file.change_type}`}>
+                <FileCode2 size={17} />
+                <code>{file.path}</code>
+                <span className="change-badge">{file.change_type}</span>
+                <span className="confidence">{Math.round(file.confidence * 100)}%</span>
+              </div>
+            ))}
+            {(impact.affected_files || []).length === 0 && (
+              <div className="analysis-empty-inline">暂未识别到受影响文件。</div>
+            )}
           </div>
-          <div style={styles.summary}>{impact.summary}</div>
-          {impact.affected_files && impact.affected_files.length > 0 && (
-            <div>
-              <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: '0.25rem' }}>受影响文件 ({impact.affected_files.length})</div>
-              {impact.affected_files.slice(0, 10).map((f, i) => (
-                <div key={i} style={styles.fileRow}>
-                  <span style={styles.filePath}>{f.path}</span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                    <span style={styles.changeTag(f.change_type)}>{f.change_type}</span>
-                    <span style={{ fontSize: '0.7rem', color: '#888' }}>{Math.round(f.confidence * 100)}%</span>
-                  </div>
-                </div>
-              ))}
-              {impact.affected_files.length > 10 && (
-                <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '0.25rem' }}>
-                  ... 还有 {impact.affected_files.length - 10} 个文件
-                </div>
-              )}
-            </div>
-          )}
         </div>
       ) : (
-        <div>
-          {loading ? (
-            <div style={styles.noData}>分析中...</div>
-          ) : (
-            <button style={styles.btn} onClick={loadSources}>
-              🔍 分析 Code Impact
-            </button>
-          )}
+        <div className="analysis-empty">
+          <Code2 size={28} />
+          <strong>尚未生成代码影响分析</strong>
+          <span>先在 Codebase 页面添加并扫描代码源，然后从这里开始分析。</span>
+          <button className="button button-primary" type="button" onClick={openSourcePicker} disabled={loading}>
+            选择代码源
+          </button>
         </div>
       )}
 
-      {/* Source picker dialog */}
       {showSources && (
-        <div style={{
-          position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.3)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200,
-        }} onClick={() => setShowSources(false)}>
-          <div style={{
-            background: '#fff', borderRadius: 12, padding: '1.5rem', width: '100%', maxWidth: 400,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', color: '#1a1a2e' }}>
-              选择代码源进行分析
-            </div>
-            {sources.length === 0 ? (
-              <div style={{ fontSize: '0.85rem', color: '#888' }}>
-                暂未配置代码源，请先在 Codebase 页面添加。
-              </div>
-            ) : (
+        <div className="workspace-modal-backdrop" role="presentation" onMouseDown={() => setShowSources(false)}>
+          <div className="workspace-modal" role="dialog" aria-modal="true" aria-labelledby="source-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="workspace-modal-header">
               <div>
-                {sources.map((s) => (
-                  <div key={s.id} style={{
-                    padding: '0.6rem 0.8rem', cursor: 'pointer', borderRadius: 6, marginBottom: '0.3rem',
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    background: '#f8faff', border: '1px solid #e8ecf4',
-                  }} onClick={() => handleAnalyze(s.id)}>
-                    <span style={{ fontWeight: 500, fontSize: '0.9rem' }}>{s.name}</span>
-                    <span style={{ fontSize: '0.75rem', color: '#888' }}>{s.provider}</span>
-                  </div>
-                ))}
+                <h3 id="source-dialog-title">选择代码源</h3>
+                <p>使用已扫描的代码仓库分析当前 Ticket。</p>
               </div>
-            )}
-            <div style={{ marginTop: '1rem', textAlign: 'right' as const }}>
-              <button style={{ ...styles.btn, background: '#ccc', color: '#333' }} onClick={() => setShowSources(false)}>
-                取消
+              <button className="icon-button" type="button" aria-label="关闭" title="关闭" onClick={() => setShowSources(false)}>
+                <X size={18} />
               </button>
+            </div>
+            <div className="source-list">
+              {sources.map((source) => (
+                <button className="source-option" type="button" key={source.id} onClick={() => handleAnalyze(source.id)}>
+                  <Code2 size={18} />
+                  <span>
+                    <strong>{source.name}</strong>
+                    <small>{source.provider} · {source.default_branch}</small>
+                  </span>
+                  <span className={`source-status is-${source.scan_status}`}>{source.scan_status}</span>
+                </button>
+              ))}
+              {sources.length === 0 && (
+                <div className="analysis-empty-inline">尚未配置代码源，请先前往 Codebase 页面添加。</div>
+              )}
             </div>
           </div>
         </div>
       )}
-    </div>
+    </section>
   )
 }

@@ -3,6 +3,7 @@
 将 scopepilot.analyzer 中的 AnalysisPipeline 集成到后端服务层，
 支持触发式 Sprint 分析和查询已有分析结果。
 """
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -10,7 +11,7 @@ from typing import Optional
 from ..adapters import create_analysis_pipeline
 from ..database import SqliteStore
 
-from .jira import JiraService, _sprints
+from .jira import JiraService, SprintStore, TicketStore, _sprints
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,11 @@ class AnalysisService:
                 sprint["name"], len(tickets),
             )
             ticket_analyses = pipeline.analyze_tickets_batch(tickets)
+            for ticket, ticket_analysis in zip(tickets, ticket_analyses):
+                await TicketStore.update_fields(
+                    ticket["id"],
+                    {"analysis_data": ticket_analysis.to_dict()},
+                )
 
             # 5. 生成 sprint 摘要
             logger.info(
@@ -130,6 +136,60 @@ class AnalysisService:
             from ..services.jira import SprintStore
             await SprintStore._persist_update(sprint_id, {"analysis_status": "failed"})
             logger.exception("Sprint %d 分析过程出现未预期错误", sprint_id)
+            raise AnalysisServiceError(str(exc)) from exc
+
+    @staticmethod
+    async def analyze_ticket(sprint_id: int, ticket_id: int) -> dict:
+        """Analyze one ticket and replace only that ticket's stored result."""
+        sprint = JiraService.get_sprint(sprint_id)
+        ticket = JiraService.get_ticket(ticket_id)
+        if sprint is None or ticket is None or ticket.get("sprint_id") != sprint_id:
+            raise AnalysisServiceError("Ticket does not belong to this Sprint")
+
+        try:
+            pipeline = create_analysis_pipeline()
+            ticket_analysis = await asyncio.to_thread(pipeline.analyze_ticket, ticket)
+            result = ticket_analysis.to_dict()
+
+            analysis_data = sprint.get("analysis_data") or {
+                "sprint_analysis": {
+                    "sprint_name": sprint["name"],
+                    "total_tickets": sprint["total_tickets"],
+                    "summary": "",
+                    "risk_map": [],
+                    "open_questions": [],
+                    "suggested_execution_order": [],
+                    "ticket_analyses": [],
+                },
+                "ticket_analyses": [],
+            }
+            ticket_analyses = [
+                item
+                for item in analysis_data.get("ticket_analyses", [])
+                if item.get("ticket_key") != ticket["key"]
+            ]
+            ticket_analyses.append(result)
+            analysis_data["ticket_analyses"] = ticket_analyses
+            analysis_data["sprint_analysis"]["ticket_analyses"] = ticket_analyses
+
+            analysis_status = (
+                "done"
+                if len(ticket_analyses) >= sprint["total_tickets"]
+                else "partial"
+            )
+            await TicketStore.update_fields(ticket_id, {"analysis_data": result})
+            await SprintStore.update_fields(
+                sprint_id,
+                {
+                    "analysis_data": analysis_data,
+                    "analysis_status": analysis_status,
+                },
+            )
+            return result
+        except AnalysisServiceError:
+            raise
+        except Exception as exc:
+            logger.exception("Ticket %d AI analysis failed", ticket_id)
             raise AnalysisServiceError(str(exc)) from exc
 
     @staticmethod

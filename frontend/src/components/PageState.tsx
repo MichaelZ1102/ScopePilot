@@ -1,4 +1,5 @@
 import { type ReactNode } from 'react'
+import { AlertCircle, Inbox, LoaderCircle } from 'lucide-react'
 
 interface Props {
   loading?: boolean
@@ -11,24 +12,28 @@ interface Props {
 export function PageState({ loading, error, empty, emptyText = '暂无数据', children }: Props) {
   if (loading) {
     return (
-      <div style={{ padding: 24, textAlign: 'center', color: '#888' }}>
-        加载中...
+      <div className="loading-state">
+        <span className="loading-state-icon"><LoaderCircle className="spin" size={22} /></span>
+        <p>正在加载...</p>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div style={{ padding: 24, textAlign: 'center', color: '#c00' }}>
-        <p>加载失败: {error.message}</p>
+      <div className="empty-state">
+        <span className="empty-state-icon"><AlertCircle size={22} /></span>
+        <h2>加载失败</h2>
+        <p>{error.message}</p>
       </div>
     )
   }
 
   if (empty) {
     return (
-      <div style={{ padding: 24, textAlign: 'center', color: '#888' }}>
-        {emptyText}
+      <div className="empty-state">
+        <span className="empty-state-icon"><Inbox size={22} /></span>
+        <p>{emptyText}</p>
       </div>
     )
   }

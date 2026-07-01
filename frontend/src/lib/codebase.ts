@@ -7,4 +7,13 @@ export async function scanCodeSource(id: number) { const r = await api.post(`/co
 export const scanRepository = scanCodeSource
 export async function deleteCodeSource(id: number) { await api.delete(`/code-sources/${id}`) }
 export async function getLatestSnapshot(id: number) { const r = await api.get(`/code-sources/${id}/snapshot`); return r.data as RepoSnapshot | null }
-export async function analyzeCodeImpact(sourceId: number, ticketId: number, sprintId: number, summary?: string, description?: string) { const r = await api.post(`/code-sources/${sourceId}/impact/${ticketId}`, { sprint_id: sprintId, summary: summary || '', description: description || '' }); return r.data as CodeImpact }
+export async function analyzeCodeImpact(sourceId: number, ticketId: number, sprintId: number, summary?: string, description?: string) {
+  const r = await api.post(`/code-sources/${sourceId}/impact/${ticketId}`, null, {
+    params: { sprint_id: sprintId, summary: summary || '', description: description || '' },
+  })
+  return r.data as CodeImpact
+}
+export async function getTicketCodeImpact(ticketId: number) {
+  const r = await api.get(`/code-sources/impact/ticket/${ticketId}`)
+  return r.data as CodeImpact
+}

@@ -1,76 +1,57 @@
-import { useState, useEffect } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useEffect, useState } from 'react'
 import {
-  listSpecs, importSpecFromUrl, importSpecFromContent, deleteSpec,
-  generateTestPlan, listTestPlans, getTestPlan,
-  exportPlanMarkdown, exportPlanPostman,
-  type ApiSpec, type TestPlan,
+  ArrowLeft,
+  Download,
+  FileJson2,
+  FlaskConical,
+  LoaderCircle,
+  Plus,
+  Sparkles,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react'
+
+import {
+  deleteSpec,
+  exportPlanMarkdown,
+  exportPlanPostman,
+  generateTestPlan,
+  getTestPlan,
+  importSpecFromContent,
+  importSpecFromUrl,
+  listSpecs,
+  listTestPlans,
+  type ApiSpec,
+  type TestPlan,
 } from '../lib/api'
 import { getApiErrorMessage } from '../lib/client'
 
-const styles: any = {
-  page: { maxWidth: 1100, margin: '0 auto' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' },
-  title: { fontSize: '1.5rem', fontWeight: 700, color: '#1a1a2e' },
-  btn: { padding: '0.5rem 1.2rem', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '0.9rem', fontWeight: 600, color: '#fff' },
-  btnPrimary: { background: '#4fc3f7' },
-  btnDark: { background: '#1a1a2e' },
-  btnDanger: { background: '#e74c3c' },
-  btnSuccess: { background: '#81c784' },
-  btnSmall: { padding: '0.35rem 0.8rem', fontSize: '0.8rem' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1rem' },
-  card: { background: '#fff', borderRadius: 10, padding: '1.25rem', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', border: '1px solid #eee' },
-  cardTitle: { fontSize: '1.1rem', fontWeight: 600, color: '#1a1a2e', marginBottom: '0.4rem' },
-  cardText: { fontSize: '0.85rem', color: '#888', marginBottom: '0.2rem' },
-  cardActions: { display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' as const },
-  empty: { textAlign: 'center' as const, color: '#888', padding: '3rem', background: '#fff', borderRadius: 10 },
-  modalOverlay: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 },
-  modal: { background: '#fff', borderRadius: 12, padding: '2rem', width: '100%', maxWidth: 500, boxShadow: '0 8px 32px rgba(0,0,0,0.2)', maxHeight: '90vh', overflow: 'auto' },
-  modalTitle: { fontSize: '1.2rem', fontWeight: 600, marginBottom: '0.5rem', color: '#1a1a2e' },
-  modalSub: { fontSize: '0.85rem', color: '#888', marginBottom: '1.25rem' },
-  label: { display: 'block', color: '#555', fontSize: '0.85rem', fontWeight: 500, marginBottom: '0.3rem' },
-  input: { width: '100%', padding: '0.6rem 0.8rem', borderRadius: 6, border: '1px solid #ddd', fontSize: '0.9rem', marginBottom: '1rem', boxSizing: 'border-box' as const },
-  textarea: { width: '100%', padding: '0.6rem 0.8rem', borderRadius: 6, border: '1px solid #ddd', fontSize: '0.9rem', marginBottom: '1rem', boxSizing: 'border-box' as const, minHeight: 120, fontFamily: 'monospace' },
-  modalActions: { display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' as const, marginTop: '1rem' },
-  tag: { display: 'inline-block', padding: '0.15rem 0.5rem', borderRadius: 4, background: '#e8ecf4', color: '#555', fontSize: '0.78rem', marginRight: '0.3rem', marginBottom: '0.3rem' },
-  tabBar: { display: 'flex', gap: '0.5rem', marginBottom: '1rem' },
-  tab: (active: boolean) => ({ padding: '0.5rem 1.2rem', borderRadius: 6, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 500, border: 'none', background: active ? '#1a1a2e' : '#eee', color: active ? '#fff' : '#333' }),
-  testTypeTag: (type: string) => {
-    const colors: Record<string, string> = { positive: '#81c784', negative: '#e74c3c', edge: '#ffb74d', security: '#ba68c8' }
-    return { display: 'inline-block', padding: '0.1rem 0.4rem', borderRadius: 4, background: colors[type] || '#eee', color: '#fff', fontSize: '0.75rem', fontWeight: 500 }
-  },
-  detailSection: { background: '#f8faff', borderRadius: 8, padding: '1rem', marginTop: '0.75rem', border: '1px solid #e8ecf4', fontSize: '0.88rem', lineHeight: 1.5 },
-  methodBadge: (method: string) => {
-    const colors: Record<string, string> = { GET: '#81c784', POST: '#4fc3f7', PUT: '#ffb74d', PATCH: '#ba68c8', DELETE: '#e74c3c' }
-    return { display: 'inline-block', padding: '0.1rem 0.4rem', borderRadius: 4, background: colors[method] || '#888', color: '#fff', fontSize: '0.72rem', fontWeight: 700, fontFamily: 'monospace', marginRight: '0.4rem' }
-  },
-}
-
 export default function ApiTestPlans() {
-  const { t } = useTranslation()
   const [tab, setTab] = useState<'specs' | 'plans'>('specs')
   const [specs, setSpecs] = useState<ApiSpec[]>([])
   const [plans, setPlans] = useState<TestPlan[]>([])
   const [loading, setLoading] = useState(true)
-
-  // Import modal
   const [showImport, setShowImport] = useState(false)
   const [importMode, setImportMode] = useState<'url' | 'content'>('url')
   const [importForm, setImportForm] = useState({ url: '', name: '', content: '' })
   const [importing, setImporting] = useState(false)
-
-  // Plan detail
+  const [generatingId, setGeneratingId] = useState<number | null>(null)
   const [viewPlan, setViewPlan] = useState<TestPlan | null>(null)
-  const [planFilter] = useState<string>('all')
 
   useEffect(() => { loadData() }, [])
 
   async function loadData() {
     try {
-      const [s, p] = await Promise.all([listSpecs(), listTestPlans()])
-      setSpecs(s)
-      setPlans(p)
-    } catch { /* ignore */ } finally { setLoading(false) }
+      const [loadedSpecs, loadedPlans] = await Promise.all([listSpecs(), listTestPlans()])
+      setSpecs(loadedSpecs)
+      setPlans(loadedPlans)
+    } catch {
+      setSpecs([])
+      setPlans([])
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function handleImport() {
@@ -84,192 +65,240 @@ export default function ApiTestPlans() {
       setShowImport(false)
       setImportForm({ url: '', name: '', content: '' })
       await loadData()
-    } catch (err: unknown) {
-      alert(getApiErrorMessage(err, 'Import failed'))
-    } finally { setImporting(false) }
+    } catch (error: unknown) {
+      alert(getApiErrorMessage(error, 'Import failed'))
+    } finally {
+      setImporting(false)
+    }
   }
 
   async function handleDeleteSpec(id: number) {
     if (!confirm('确定删除该 API Spec 吗？关联的测试计划也会被删除。')) return
-    try { await deleteSpec(id); await loadData() } catch { alert('删除失败') }
+    try {
+      await deleteSpec(id)
+      await loadData()
+    } catch {
+      alert('删除失败')
+    }
   }
 
   async function handleGenerate(specId: number) {
+    setGeneratingId(specId)
     try {
       const plan = await generateTestPlan(specId)
       setPlans(await listTestPlans())
       setViewPlan(plan)
       setTab('plans')
-    } catch (err: unknown) {
-      alert(getApiErrorMessage(err, 'Generate failed'))
+    } catch (error: unknown) {
+      alert(getApiErrorMessage(error, 'Generate failed'))
+    } finally {
+      setGeneratingId(null)
     }
   }
 
   async function handleViewPlan(planId: number) {
     try {
-      const plan = await getTestPlan(planId)
-      setViewPlan(plan)
-    } catch { alert('获取计划失败') }
+      setViewPlan(await getTestPlan(planId))
+    } catch {
+      alert('获取计划失败')
+    }
   }
 
-  async function handleExportMd(planId: number) {
+  async function handleExportMarkdown(planId: number) {
     try {
       const { markdown } = await exportPlanMarkdown(planId)
-      const blob = new Blob([markdown], { type: 'text/markdown' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url; a.download = `test-plan-${planId}.md`
-      a.click(); URL.revokeObjectURL(url)
-    } catch { alert('导出失败') }
+      downloadFile(markdown, `test-plan-${planId}.md`, 'text/markdown')
+    } catch {
+      alert('导出失败')
+    }
   }
 
   async function handleExportPostman(planId: number) {
     try {
       const { collection } = await exportPlanPostman(planId)
-      const blob = new Blob([JSON.stringify(collection, null, 2)], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url; a.download = `test-plan-${planId}.postman_collection.json`
-      a.click(); URL.revokeObjectURL(url)
-    } catch { alert('导出失败') }
+      downloadFile(JSON.stringify(collection, null, 2), `test-plan-${planId}.postman_collection.json`, 'application/json')
+    } catch {
+      alert('导出失败')
+    }
   }
 
-  // Unused planFilter kept for future filtering UI
-  if (false) void planFilter;
-
-  if (loading) return <div style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>{t('dashboard.loading')}</div>
+  if (loading) {
+    return (
+      <div className="loading-state">
+        <span className="loading-state-icon"><LoaderCircle className="spin" size={22} /></span>
+        <p>正在加载 API 数据...</p>
+      </div>
+    )
+  }
 
   return (
-    <div style={styles.page}>
-      <div style={styles.header}>
-        <h2 style={styles.title}>🧪 API 测试计划</h2>
-        <button style={{ ...styles.btn, ...styles.btnPrimary }} onClick={() => setShowImport(true)}>
-          + 导入 OpenAPI Spec
-        </button>
-      </div>
+    <div className="workspace-page">
+      <header className="workspace-header">
+        <div>
+          <span className="workspace-kicker">API Quality Workspace</span>
+          <h1>API 测试</h1>
+          <p>导入 OpenAPI 定义，生成覆盖正向、异常、边界和安全场景的测试计划。</p>
+        </div>
+        <div className="workspace-header-actions">
+          <button className="button button-primary" type="button" onClick={() => setShowImport(true)}>
+            <Upload size={17} />
+            导入 OpenAPI
+          </button>
+        </div>
+      </header>
 
-      <div style={styles.tabBar}>
-        <button style={styles.tab(tab === 'specs')} onClick={() => setTab('specs')}>
-          📋 API Specs ({specs.length})
+      <div className="workspace-tabs" role="tablist" aria-label="API workspace views">
+        <button className={`workspace-tab${tab === 'specs' ? ' is-active' : ''}`} type="button" onClick={() => { setTab('specs'); setViewPlan(null) }}>
+          <FileJson2 size={15} /> API Specs ({specs.length})
         </button>
-        <button style={styles.tab(tab === 'plans')} onClick={() => setTab('plans')}>
-          📝 测试计划 ({plans.length})
+        <button className={`workspace-tab${tab === 'plans' ? ' is-active' : ''}`} type="button" onClick={() => setTab('plans')}>
+          <FlaskConical size={15} /> 测试计划 ({plans.length})
         </button>
       </div>
 
       {tab === 'specs' && (
         specs.length === 0 ? (
-          <div style={styles.empty}>
-            <p style={{ marginBottom: '0.75rem' }}>暂无 API Spec，点击上方按钮导入。</p>
-          </div>
+          <section className="empty-state">
+            <span className="empty-state-icon"><FileJson2 size={23} /></span>
+            <h2>导入第一份 OpenAPI 定义</h2>
+            <p>支持从 URL 或 JSON/YAML 内容导入，导入后即可生成可导出的 API 测试计划。</p>
+            <button className="button button-primary" type="button" onClick={() => setShowImport(true)}>
+              <Upload size={16} />
+              导入 OpenAPI
+            </button>
+          </section>
         ) : (
-          <div style={styles.grid}>
-            {specs.map((s) => (
-              <div key={s.id} style={styles.card}>
-                <div style={styles.cardTitle}>{s.name}</div>
-                <div style={styles.cardText}>{s.title} v{s.version}</div>
-                <div style={styles.cardText}>📡 {s.endpoint_count} 个端点</div>
-                <div style={styles.cardText}>📎 {s.source.slice(0, 60)}</div>
-                <div style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: '#aaa' }}>
-                  {new Date(s.created_at).toLocaleString('zh-CN')}
+          <section className="resource-grid">
+            {specs.map((spec) => (
+              <article className="resource-card" key={spec.id}>
+                <div className="resource-card-header">
+                  <span className="resource-icon"><FileJson2 size={19} /></span>
+                  <div>
+                    <h2>{spec.name}</h2>
+                    <p>{spec.title} · v{spec.version}</p>
+                  </div>
+                  <span className="status-badge is-info">已导入</span>
                 </div>
-                <div style={styles.cardActions}>
-                  <button style={{ ...styles.btn, ...styles.btnSuccess, ...styles.btnSmall }} onClick={() => handleGenerate(s.id)}>
-                    🚀 生成测试计划
+                <div className="resource-summary">
+                  <span>端点<strong>{spec.endpoint_count}</strong></span>
+                  <span>版本<strong>{spec.version || '-'}</strong></span>
+                  <span>导入日期<strong>{new Date(spec.created_at).toLocaleDateString('zh-CN')}</strong></span>
+                </div>
+                <p className="resource-meta">{spec.source.slice(0, 100)}</p>
+                <div className="row-actions">
+                  <button className="button button-primary button-small" type="button" onClick={() => handleGenerate(spec.id)} disabled={generatingId === spec.id}>
+                    {generatingId === spec.id ? <LoaderCircle className="spin" size={14} /> : <Sparkles size={14} />}
+                    {generatingId === spec.id ? '生成中' : '生成测试计划'}
                   </button>
-                  <button style={{ ...styles.btn, ...styles.btnDanger, ...styles.btnSmall }} onClick={() => handleDeleteSpec(s.id)}>
+                  <button className="button button-danger button-small" type="button" onClick={() => handleDeleteSpec(spec.id)}>
+                    <Trash2 size={14} />
                     删除
                   </button>
                 </div>
-              </div>
+              </article>
             ))}
-          </div>
+          </section>
         )
       )}
 
       {tab === 'plans' && (
-        <>
-          {plans.length === 0 ? (
-            <div style={styles.empty}>
-              <p>暂无测试计划。先在 Specs 标签页导入 API 定义并生成计划。</p>
-            </div>
-          ) : viewPlan ? (
-            <PlanDetail
-              plan={viewPlan}
-              onBack={() => setViewPlan(null)}
-              onExportMd={handleExportMd}
-              onExportPostman={handleExportPostman}
-            />
-          ) : (
-            <div style={styles.grid}>
-              {plans.map((p) => {
-                const cov = p.coverage_summary
-                return (
-                  <div key={p.id} onClick={() => handleViewPlan(p.id)} style={{ ...styles.card, cursor: 'pointer' }}>
-                    <div style={styles.cardTitle}>{p.title}</div>
-                    <div style={styles.cardText}>📡 {p.endpoints_analyzed} 端点 | 🧪 {p.scenario_count} 场景</div>
-                    <div style={{ marginTop: '0.3rem', display: 'flex', gap: '0.5rem', fontSize: '0.78rem' }}>
-                      <span>✅ {cov.positive_scenarios} 正向</span>
-                      <span>❌ {cov.negative_scenarios} 负向</span>
-                      <span>⚠️ {cov.edge_scenarios} 边界</span>
-                    </div>
-                    <div style={{ marginTop: '0.3rem', fontSize: '0.78rem', color: '#aaa' }}>
-                      {cov.ai_generated ? '🤖 AI 生成' : '📐 规则生成'} · {new Date(p.created_at).toLocaleString('zh-CN')}
-                    </div>
-                    <div style={styles.cardActions}>
-                      <button style={{ ...styles.btn, ...styles.btnSmall, background: '#90a4ae' }} onClick={(e) => { e.stopPropagation(); handleExportMd(p.id) }}>
-                        📄 Markdown
-                      </button>
-                      <button style={{ ...styles.btn, ...styles.btnSmall, background: '#ff6b6b' }} onClick={(e) => { e.stopPropagation(); handleExportPostman(p.id) }}>
-                        🚀 Postman
-                      </button>
-                    </div>
+        plans.length === 0 ? (
+          <section className="empty-state">
+            <span className="empty-state-icon"><FlaskConical size={23} /></span>
+            <h2>暂无测试计划</h2>
+            <p>先在 API Specs 中导入定义并生成计划，生成结果会在这里集中管理。</p>
+            <button className="button" type="button" onClick={() => setTab('specs')}>查看 API Specs</button>
+          </section>
+        ) : viewPlan ? (
+          <PlanDetail
+            plan={viewPlan}
+            onBack={() => setViewPlan(null)}
+            onExportMarkdown={handleExportMarkdown}
+            onExportPostman={handleExportPostman}
+          />
+        ) : (
+          <section className="resource-grid">
+            {plans.map((plan) => (
+              <article className="resource-card" key={plan.id}>
+                <div className="resource-card-header">
+                  <span className="resource-icon"><FlaskConical size={19} /></span>
+                  <div>
+                    <h2>{plan.title}</h2>
+                    <p>{plan.coverage_summary.ai_generated ? 'AI 生成' : '规则生成'}</p>
                   </div>
-                )
-              })}
-            </div>
-          )}
-        </>
+                  <span className="status-badge is-success">已生成</span>
+                </div>
+                <div className="resource-summary">
+                  <span>端点<strong>{plan.endpoints_analyzed}</strong></span>
+                  <span>场景<strong>{plan.scenario_count}</strong></span>
+                  <span>正向场景<strong>{plan.coverage_summary.positive_scenarios}</strong></span>
+                </div>
+                <div className="tag-list">
+                  <span className="tag is-success">正向 {plan.coverage_summary.positive_scenarios}</span>
+                  <span className="tag is-high">负向 {plan.coverage_summary.negative_scenarios}</span>
+                  <span className="tag is-medium">边界 {plan.coverage_summary.edge_scenarios}</span>
+                </div>
+                <div className="row-actions">
+                  <button className="button button-primary button-small" type="button" onClick={() => handleViewPlan(plan.id)}>查看计划</button>
+                  <button className="button button-small" type="button" onClick={() => handleExportMarkdown(plan.id)}>
+                    <Download size={14} /> Markdown
+                  </button>
+                  <button className="button button-small" type="button" onClick={() => handleExportPostman(plan.id)}>
+                    <Download size={14} /> Postman
+                  </button>
+                </div>
+              </article>
+            ))}
+          </section>
+        )
       )}
 
-      {/* Import Modal */}
       {showImport && (
-        <div style={styles.modalOverlay} onClick={() => setShowImport(false)}>
-          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <div style={styles.modalTitle}>导入 OpenAPI Spec</div>
-            <div style={styles.modalSub}>从 URL 或粘贴内容导入 API 定义</div>
-
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-              <button style={styles.tab(importMode === 'url')} onClick={() => setImportMode('url')}>🔗 URL</button>
-              <button style={styles.tab(importMode === 'content')} onClick={() => setImportMode('content')}>📝 粘贴内容</button>
-            </div>
-
-            <label style={styles.label}>名称</label>
-            <input style={styles.input} type="text" value={importForm.name}
-              onChange={(e) => setImportForm({ ...importForm, name: e.target.value })}
-              placeholder="My API" required />
-
-            {importMode === 'url' ? (
-              <>
-                <label style={styles.label}>OpenAPI URL</label>
-                <input style={styles.input} type="url" value={importForm.url}
-                  onChange={(e) => setImportForm({ ...importForm, url: e.target.value })}
-                  placeholder="https://raw.githubusercontent.com/.../openapi.json" required />
-              </>
-            ) : (
-              <>
-                <label style={styles.label}>OpenAPI JSON/YAML 内容</label>
-                <textarea style={styles.textarea} value={importForm.content}
-                  onChange={(e) => setImportForm({ ...importForm, content: e.target.value })}
-                  placeholder='{"openapi": "3.0.0", "info": {...}, "paths": {...}}' />
-              </>
-            )}
-
-            <div style={styles.modalActions}>
-              <button style={{ ...styles.btn, background: '#ccc', color: '#333' }} onClick={() => setShowImport(false)}>取消</button>
-              <button style={{ ...styles.btn, ...styles.btnPrimary }} onClick={handleImport} disabled={importing}>
-                {importing ? '导入中...' : '导入'}
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowImport(false)}>
+          <div className="workspace-modal is-wide" role="dialog" aria-modal="true" aria-labelledby="import-spec-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h2 id="import-spec-title">导入 OpenAPI Spec</h2>
+                <p>从公开 URL 或粘贴 JSON/YAML 内容导入 API 定义。</p>
+              </div>
+              <button className="icon-button" type="button" title="关闭" aria-label="关闭" onClick={() => setShowImport(false)}>
+                <X size={18} />
               </button>
+            </div>
+            <div className="modal-body">
+              <div className="workspace-tabs">
+                <button className={`workspace-tab${importMode === 'url' ? ' is-active' : ''}`} type="button" onClick={() => setImportMode('url')}>URL</button>
+                <button className={`workspace-tab${importMode === 'content' ? ' is-active' : ''}`} type="button" onClick={() => setImportMode('content')}>粘贴内容</button>
+              </div>
+              <div className="form-grid">
+                <label className="form-field is-wide">
+                  <span>名称</span>
+                  <input type="text" value={importForm.name} onChange={(event) => setImportForm({ ...importForm, name: event.target.value })} placeholder="Customer API" />
+                </label>
+                {importMode === 'url' ? (
+                  <label className="form-field is-wide">
+                    <span>OpenAPI URL</span>
+                    <input type="url" value={importForm.url} onChange={(event) => setImportForm({ ...importForm, url: event.target.value })} placeholder="https://example.com/openapi.json" />
+                  </label>
+                ) : (
+                  <label className="form-field is-wide">
+                    <span>OpenAPI JSON/YAML 内容</span>
+                    <textarea value={importForm.content} onChange={(event) => setImportForm({ ...importForm, content: event.target.value })} placeholder='{"openapi":"3.0.0","info":{},"paths":{}}' />
+                  </label>
+                )}
+              </div>
+              <div className="modal-actions">
+                <button className="button" type="button" onClick={() => setShowImport(false)}>取消</button>
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={handleImport}
+                  disabled={importing || !importForm.name || (importMode === 'url' ? !importForm.url : !importForm.content)}
+                >
+                  {importing ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />}
+                  {importing ? '导入中' : '导入 Spec'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -278,81 +307,107 @@ export default function ApiTestPlans() {
   )
 }
 
-function PlanDetail({ plan, onBack, onExportMd, onExportPostman }: {
-  plan: TestPlan; onBack: () => void; onExportMd: (id: number) => void; onExportPostman: (id: number) => void
+function PlanDetail({ plan, onBack, onExportMarkdown, onExportPostman }: {
+  plan: TestPlan
+  onBack: () => void
+  onExportMarkdown: (id: number) => void
+  onExportPostman: (id: number) => void
 }) {
-  const cov = plan.coverage_summary
-  const [filterType, setFilterType] = useState<string>('all')
-
-  const scenarios = (plan.scenarios || []).filter(s => filterType === 'all' || s.test_type === filterType)
+  const [filterType, setFilterType] = useState('all')
+  const scenarios = (plan.scenarios || []).filter((scenario) => filterType === 'all' || scenario.test_type === filterType)
   const typeCounts: Record<string, number> = {}
-  ;(plan.scenarios || []).forEach(s => { typeCounts[s.test_type] = (typeCounts[s.test_type] || 0) + 1 })
+  ;(plan.scenarios || []).forEach((scenario) => {
+    typeCounts[scenario.test_type] = (typeCounts[scenario.test_type] || 0) + 1
+  })
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-        <div>
-          <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#4fc3f7', cursor: 'pointer', fontSize: '0.9rem', marginRight: '0.75rem' }}>← 返回</button>
-          <span style={{ fontSize: '1.1rem', fontWeight: 600, color: '#1a1a2e' }}>{plan.title}</span>
+    <section>
+      <div className="detail-header">
+        <div className="detail-heading">
+          <button className="icon-button" type="button" title="返回" aria-label="返回" onClick={onBack}>
+            <ArrowLeft size={18} />
+          </button>
+          <div>
+            <h2>{plan.title}</h2>
+            <p>{plan.coverage_summary.ai_generated ? 'AI 生成测试计划' : '规则生成测试计划'}</p>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button style={{ ...styles.btn, ...styles.btnSmall, background: '#90a4ae' }} onClick={() => onExportMd(plan.id)}>📄 Markdown</button>
-          <button style={{ ...styles.btn, ...styles.btnSmall, background: '#ff6b6b' }} onClick={() => onExportPostman(plan.id)}>🚀 Postman</button>
-        </div>
-      </div>
-
-      <div style={{ ...styles.detailSection, marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
-          <div><strong>端点数:</strong> {plan.endpoints_analyzed}</div>
-          <div><strong>场景数:</strong> {plan.scenario_count}</div>
-          <div><strong>Base URL:</strong> {plan.base_url || '—'}</div>
-          <div><strong>生成方式:</strong> {cov.ai_generated ? '🤖 AI' : '📐 规则'}</div>
-        </div>
-        <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-          <span>✅ 正向: {cov.positive_scenarios}</span>
-          <span>❌ 负向: {cov.negative_scenarios}</span>
-          <span>⚠️ 边界/安全: {cov.edge_scenarios}</span>
+        <div className="detail-actions">
+          <button className="button button-small" type="button" onClick={() => onExportMarkdown(plan.id)}>
+            <Download size={14} /> Markdown
+          </button>
+          <button className="button button-primary button-small" type="button" onClick={() => onExportPostman(plan.id)}>
+            <Download size={14} /> Postman
+          </button>
         </div>
       </div>
 
-      {/* Filter */}
-      <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-        <button style={styles.tab(filterType === 'all')} onClick={() => setFilterType('all')}>全部 ({plan.scenario_count || 0})</button>
+      <div className="metric-strip">
+        <div className="metric-item"><span>端点</span><strong>{plan.endpoints_analyzed}</strong></div>
+        <div className="metric-item"><span>全部场景</span><strong>{plan.scenario_count}</strong></div>
+        <div className="metric-item"><span>正向场景</span><strong>{plan.coverage_summary.positive_scenarios}</strong></div>
+        <div className="metric-item"><span>异常与边界</span><strong>{plan.coverage_summary.negative_scenarios + plan.coverage_summary.edge_scenarios}</strong></div>
+      </div>
+
+      <div className="workspace-tabs">
+        <button className={`workspace-tab${filterType === 'all' ? ' is-active' : ''}`} type="button" onClick={() => setFilterType('all')}>
+          全部 ({plan.scenario_count || 0})
+        </button>
         {Object.entries(typeCounts).map(([type, count]) => (
-          <button key={type} style={styles.tab(filterType === type)} onClick={() => setFilterType(type)}>
-            {type} ({count})
+          <button className={`workspace-tab${filterType === type ? ' is-active' : ''}`} type="button" key={type} onClick={() => setFilterType(type)}>
+            {testTypeLabel(type)} ({count})
           </button>
         ))}
       </div>
 
-      {/* Scenarios */}
-      {scenarios.map((s, i) => (
-        <div key={i} style={{
-          background: '#fff', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: '0.5rem',
-          border: '1px solid #eee', boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <span style={styles.testTypeTag(s.test_type)}>{s.test_type}</span>
-              <span style={styles.methodBadge(s.method)}>{s.method}</span>
-              <code style={{ fontSize: '0.85rem', color: '#1a1a2e' }}>{s.endpoint}</code>
+      <div className="detail-stack">
+        {scenarios.map((scenario, index) => (
+          <article className="detail-card" key={`${scenario.endpoint}-${index}`}>
+            <div className="detail-card-head">
+              <div className="tag-list" style={{ marginTop: 0 }}>
+                <span className={`tag ${testTypeClass(scenario.test_type)}`}>{testTypeLabel(scenario.test_type)}</span>
+                <span className="tag">{scenario.method}</span>
+                <code>{scenario.endpoint}</code>
+              </div>
+              <span className="status-badge is-info">期望 {scenario.expected_status}</span>
             </div>
-            <span style={{ fontSize: '0.78rem', color: '#888' }}>期望: {s.expected_status}</span>
-          </div>
-          <div style={{ fontSize: '0.95rem', fontWeight: 500, color: '#1a1a2e', marginBottom: '0.2rem' }}>{s.scenario_name}</div>
-          <div style={{ fontSize: '0.85rem', color: '#666' }}>{s.description}</div>
-          <div style={{ fontSize: '0.82rem', color: '#888', marginTop: '0.2rem' }}>{s.expected_behavior}</div>
-          {s.test_input && Object.keys(s.test_input).length > 0 && (
-            <pre style={{ fontSize: '0.75rem', background: '#f5f5f5', padding: '0.4rem 0.6rem', borderRadius: 4, marginTop: '0.3rem', overflow: 'auto', maxHeight: 100 }}>
-              {JSON.stringify(s.test_input, null, 2)}
-            </pre>
-          )}
-        </div>
-      ))}
-
-      {scenarios.length === 0 && (
-        <div style={styles.empty}>该分类暂无测试场景</div>
-      )}
-    </div>
+            <h3>{scenario.scenario_name}</h3>
+            <p>{scenario.description}</p>
+            <p>{scenario.expected_behavior}</p>
+            {scenario.test_input && Object.keys(scenario.test_input).length > 0 && (
+              <pre className="code-block">{JSON.stringify(scenario.test_input, null, 2)}</pre>
+            )}
+          </article>
+        ))}
+        {scenarios.length === 0 && <div className="empty-state"><p>该分类暂无测试场景。</p></div>}
+      </div>
+    </section>
   )
+}
+
+function testTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    positive: '正向',
+    negative: '负向',
+    edge: '边界',
+    security: '安全',
+  }
+  return labels[type] || type
+}
+
+function testTypeClass(type: string) {
+  if (type === 'positive') return 'is-success'
+  if (type === 'negative' || type === 'security') return 'is-high'
+  if (type === 'edge') return 'is-medium'
+  return ''
+}
+
+function downloadFile(content: string, filename: string, type: string) {
+  const blob = new Blob([content], { type })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
 }

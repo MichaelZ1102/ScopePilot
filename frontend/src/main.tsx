@@ -7,6 +7,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import App from './App'
 import './lib/i18n'
 import './styles/global.css'
+import './styles/WorkspaceUI.css'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000, refetchOnWindowFocus: false } },

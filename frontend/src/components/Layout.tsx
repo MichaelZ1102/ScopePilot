@@ -1,162 +1,76 @@
-import { useState, useEffect } from 'react'
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { getMe } from '../lib/auth'
-import type { User } from '../lib/types'
+import {
+  Code2,
+  FolderKanban,
+  Gauge,
+  LogOut,
+  PenTool,
+  ScanSearch,
+  Settings,
+  TestTube2,
+} from 'lucide-react'
+
+import { useAuth } from '../lib/AuthContext'
+import './Layout.css'
+
+const navItems = [
+  { to: '/', labelKey: 'nav.dashboard', icon: Gauge, end: true },
+  { to: '/projects', labelKey: 'nav.projects', icon: FolderKanban },
+  { to: '/code-sources', labelKey: 'nav.code_sources', fallback: 'Codebase', icon: Code2 },
+  { to: '/api-test-plans', labelKey: 'nav.api_tests', fallback: 'API 测试', icon: TestTube2 },
+  { to: '/figma-designs', labelKey: 'nav.figma', fallback: 'Figma', icon: PenTool },
+  { to: '/settings', labelKey: 'nav.settings', icon: Settings },
+]
 
 export default function Layout() {
   const { t } = useTranslation()
+  const { logout } = useAuth()
   const navigate = useNavigate()
-  const [user, setUser] = useState<User | null>(null)
+  const location = useLocation()
+  const isSprintWorkspace = location.pathname.startsWith('/sprint/')
 
-  useEffect(() => {
-    getMe().then(setUser).catch(() => setUser(null))
-  }, [])
-
-  const handleLogout = async () => {
-    try {
-      await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' })
-    } catch { /* ignore */ }
+  async function handleLogout() {
+    await logout()
     navigate('/login')
   }
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', margin: 0 }}>
-      <nav style={{
-        width: 240,
-        background: '#1a1a2e',
-        color: '#fff',
-        padding: '1.5rem 0',
-        display: 'flex',
-        flexDirection: 'column',
-      }}>
-        <h1 style={{ fontSize: '1.25rem', padding: '0 1.25rem', marginBottom: '2rem' }}>
-          {t('app.title')}
-        </h1>
-        <NavLink
-          to="/"
-          end
-          style={({ isActive }) => ({
-            padding: '0.75rem 1.25rem',
-            color: isActive ? '#fff' : '#aaa',
-            background: isActive ? 'rgba(255,255,255,0.1)' : 'transparent',
-            textDecoration: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.95rem',
-            borderLeft: isActive ? '3px solid #4fc3f7' : '3px solid transparent',
-          })}
-        >
-          <span>📊</span>
-          {t('nav.dashboard')}
-        </NavLink>
-        <NavLink
-          to="/projects"
-          style={({ isActive }) => ({
-            padding: '0.75rem 1.25rem',
-            color: isActive ? '#fff' : '#aaa',
-            background: isActive ? 'rgba(255,255,255,0.1)' : 'transparent',
-            textDecoration: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.95rem',
-            borderLeft: isActive ? '3px solid #4fc3f7' : '3px solid transparent',
-          })}
-        >
-          <span>📁</span>
-          {t('nav.projects')}
-        </NavLink>
-        <NavLink
-          to="/settings"
-          style={({ isActive }) => ({
-            padding: '0.75rem 1.25rem',
-            color: isActive ? '#fff' : '#aaa',
-            background: isActive ? 'rgba(255,255,255,0.1)' : 'transparent',
-            textDecoration: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.95rem',
-            borderLeft: isActive ? '3px solid #4fc3f7' : '3px solid transparent',
-          })}
-        >
-          <span>⚙️</span>
-          {t('nav.settings')}
-        </NavLink>
-        <NavLink
-          to="/code-sources"
-          style={({ isActive }) => ({
-            padding: '0.75rem 1.25rem',
-            color: isActive ? '#fff' : '#aaa',
-            background: isActive ? 'rgba(255,255,255,0.1)' : 'transparent',
-            textDecoration: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.95rem',
-            borderLeft: isActive ? '3px solid #4fc3f7' : '3px solid transparent',
-          })}
-        >
-          <span>📂</span>
-          {t('nav.code_sources' as any, 'Codebase')}
-        </NavLink>
-        <NavLink
-          to="/api-test-plans"
-          style={({ isActive }) => ({
-            padding: '0.75rem 1.25rem',
-            color: isActive ? '#fff' : '#aaa',
-            background: isActive ? 'rgba(255,255,255,0.1)' : 'transparent',
-            textDecoration: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.95rem',
-            borderLeft: isActive ? '3px solid #4fc3f7' : '3px solid transparent',
-          })}
-        >
-          <span>🧪</span>
-          {t('nav.api_tests' as any, 'API Tests')}
-        </NavLink>
-        <NavLink
-          to="/figma-designs"
-          style={({ isActive }) => ({
-            padding: '0.75rem 1.25rem',
-            color: isActive ? '#fff' : '#aaa',
-            background: isActive ? 'rgba(255,255,255,0.1)' : 'transparent',
-            textDecoration: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.95rem',
-            borderLeft: isActive ? '3px solid #4fc3f7' : '3px solid transparent',
-          })}
-        >
-          <span>🎨</span>
-          {t('nav.figma' as any, 'Figma')}
-        </NavLink>
-        <div style={{ flex: 1 }} />
-        <div style={{ padding: '0.75rem 1.25rem', color: '#666', fontSize: '0.85rem' }}>
-          {user?.name || user?.email || ''}
+    <div className="app-shell">
+      <aside className="app-sidebar">
+        <div className="app-brand">
+          <span className="app-brand-mark"><ScanSearch size={20} strokeWidth={2.4} /></span>
+          <span>ScopePilot</span>
         </div>
-        <div
-          onClick={handleLogout}
-          style={{
-            padding: '0.75rem 1.25rem',
-            color: '#e74c3c',
-            cursor: 'pointer',
-            fontSize: '0.9rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-          }}
-        >
-          <span>🚪</span>
-          {t('nav.logout')}
+
+        <nav className="app-navigation" aria-label="Primary navigation">
+          {navItems.map(({ to, labelKey, fallback, icon: Icon, end }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={end}
+              title={fallback || t(labelKey as any)}
+              className={({ isActive }) => `app-nav-item${isActive ? ' is-active' : ''}`}
+            >
+              <Icon size={19} strokeWidth={1.8} />
+              <span>{fallback || t(labelKey as any)}</span>
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="app-sidebar-footer">
+          <div className="app-user">
+            <span className="app-avatar">DU</span>
+            <span className="app-user-name">Demo User</span>
+          </div>
+          <button className="app-logout" type="button" onClick={handleLogout}>
+            <LogOut size={18} />
+            <span>{t('nav.logout')}</span>
+          </button>
         </div>
-      </nav>
-      <main style={{ flex: 1, padding: '2rem', background: '#f5f5f5', overflow: 'auto' }}>
+      </aside>
+
+      <main className={`app-main${isSprintWorkspace ? ' app-main-workspace' : ''}`}>
         <Outlet />
       </main>
     </div>

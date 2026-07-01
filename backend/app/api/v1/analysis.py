@@ -98,3 +98,29 @@ async def get_analysis(
         )
 
     return SprintDetailResponse(**sprint)
+
+
+@router.post(
+    "/sprints/{sprint_id}/tickets/{ticket_id}/analyze",
+    summary="重新分析单个 Ticket",
+)
+async def analyze_ticket(
+    sprint_id: Annotated[int, Path(gt=0)],
+    ticket_id: Annotated[int, Path(gt=0)],
+    token_data: dict = Depends(get_current_user),
+):
+    """Run AI analysis for one Ticket and replace its previous result."""
+    sprint = _verify_sprint_access(sprint_id, token_data)
+    ticket = JiraService.get_ticket(ticket_id)
+    if ticket is None or ticket.get("sprint_id") != sprint["id"]:
+        raise HTTPException(status_code=404, detail="Ticket 不存在")
+
+    try:
+        analysis_result = await AnalysisService.analyze_ticket(sprint_id, ticket_id)
+        return {
+            "ticket_id": ticket_id,
+            "ticket_key": ticket["key"],
+            "analysis": analysis_result,
+        }
+    except AnalysisServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

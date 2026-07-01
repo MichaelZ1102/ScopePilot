@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import Response
 
 from ...services import get_current_user
-from ...services.jira import JiraService
+from ...services.jira import JiraService, TicketStore
 from ..v1.projects import ProjectStore
 from scopepilot.analyzer import SprintAnalysis, TicketAnalysis
 from scopepilot.report import generate_sprint_report, generate_ticket_report
@@ -50,19 +50,34 @@ def _build_report(sprint_id: int, token_data: dict) -> str:
 
     # Reconstruct from stored dicts ──────────────────────────────────────────
     sprint_analysis_dict = analysis_data["sprint_analysis"]
-    ticket_analyses_dicts = analysis_data["ticket_analyses"]
+    included_ticket_keys = {
+        ticket["key"]
+        for ticket in sprint.get("tickets", [])
+        if ticket.get("report_included", True)
+    }
+    ticket_analyses_dicts = [
+        ticket_analysis
+        for ticket_analysis in analysis_data["ticket_analyses"]
+        if ticket_analysis.get("ticket_key") in included_ticket_keys
+    ]
 
     ticket_analyses = [TicketAnalysis(**ta) for ta in ticket_analyses_dicts]
 
     sprint_analysis = SprintAnalysis(
         sprint_name=sprint_analysis_dict["sprint_name"],
-        total_tickets=sprint_analysis_dict["total_tickets"],
+        total_tickets=len(ticket_analyses),
         summary=sprint_analysis_dict.get("summary", ""),
-        risk_map=sprint_analysis_dict.get("risk_map", []),
+        risk_map=[
+            risk
+            for risk in sprint_analysis_dict.get("risk_map", [])
+            if risk.get("ticket") in included_ticket_keys
+        ],
         open_questions=sprint_analysis_dict.get("open_questions", []),
-        suggested_execution_order=sprint_analysis_dict.get(
-            "suggested_execution_order", []
-        ),
+        suggested_execution_order=[
+            ticket_key
+            for ticket_key in sprint_analysis_dict.get("suggested_execution_order", [])
+            if ticket_key in included_ticket_keys
+        ],
         ticket_analyses=ticket_analyses,
     )
 
@@ -125,3 +140,42 @@ async def export_report(
             "Content-Disposition": f"attachment; filename={safe_name}_report.md",
         },
     )
+
+
+def _get_report_ticket(sprint_id: int, ticket_id: int, token_data: dict) -> dict:
+    sprint = JiraService.get_sprint(sprint_id)
+    if sprint is None:
+        raise HTTPException(status_code=404, detail="Sprint not found")
+
+    project = ProjectStore.get(sprint["project_id"])
+    if project is None or project["workspace_id"] != token_data.get("workspace_id"):
+        raise HTTPException(status_code=404, detail="Sprint not found")
+
+    ticket = JiraService.get_ticket(ticket_id)
+    if ticket is None or ticket.get("sprint_id") != sprint_id:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return ticket
+
+
+@router.post("/{sprint_id}/tickets/{ticket_id}", status_code=200)
+async def include_ticket_in_report(
+    sprint_id: Annotated[int, Path(gt=0)],
+    ticket_id: Annotated[int, Path(gt=0)],
+    token_data: dict = Depends(get_current_user),
+):
+    """Include one Ticket in Sprint report exports and shared reports."""
+    _get_report_ticket(sprint_id, ticket_id, token_data)
+    await TicketStore.update_fields(ticket_id, {"report_included": True})
+    return {"ticket_id": ticket_id, "report_included": True}
+
+
+@router.delete("/{sprint_id}/tickets/{ticket_id}", status_code=200)
+async def exclude_ticket_from_report(
+    sprint_id: Annotated[int, Path(gt=0)],
+    ticket_id: Annotated[int, Path(gt=0)],
+    token_data: dict = Depends(get_current_user),
+):
+    """Exclude one Ticket from Sprint report exports and shared reports."""
+    _get_report_ticket(sprint_id, ticket_id, token_data)
+    await TicketStore.update_fields(ticket_id, {"report_included": False})
+    return {"ticket_id": ticket_id, "report_included": False}
