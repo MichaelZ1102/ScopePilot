@@ -2,6 +2,8 @@
 
 Phase 2: In-memory store persisted to local JSON via SqliteStore.
 """
+import asyncio
+import base64
 import logging
 import re
 from datetime import datetime, timezone
@@ -10,6 +12,7 @@ from typing import Optional
 import httpx
 from ..database import SqliteStore
 from ..encryption import decrypt, encrypt
+from scopepilot.codebase_scanner import index_source_text, scan_local_repository
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +119,7 @@ class CodebaseService:
         source = cls.get_source(source_id, workspace_id)
         if not source:
             raise CodebaseError("Code source not found")
+        previous_snapshot = cls.get_latest_snapshot(source_id, workspace_id)
 
         source["scan_status"] = "scanning"
         await CodeSourceStore.update_fields(source_id, {"scan_status": "scanning"})
@@ -133,6 +137,45 @@ class CodebaseService:
             source["last_scanned_at"] = snapshot["scanned_at"]
             source["scan_status"] = "done"
             await CodeSourceStore.update_fields(source_id, {"last_scanned_at": snapshot["scanned_at"], "scan_status": "done"})
+
+            previous_sha = (previous_snapshot or {}).get("commit_sha")
+            next_sha = snapshot.get("commit_sha")
+            if previous_snapshot and previous_sha != next_sha:
+                from .jira import TicketStore
+                from .lifecycle import LifecycleService
+                from .notifications import NotificationService
+                now = datetime.now(timezone.utc).isoformat()
+                ticket_ids = {
+                    impact.get("ticket_id")
+                    for impact in CodeImpactStore.list_by("code_source_id", source_id)
+                    if impact.get("ticket_id")
+                }
+                for ticket_id in ticket_ids:
+                    ticket = TicketStore.get(ticket_id)
+                    if not ticket or not ticket.get("analysis_data"):
+                        continue
+                    await TicketStore.update_fields(
+                        ticket_id,
+                        {
+                            "analysis_status": "stale",
+                            "analysis_stale_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                    await LifecycleService.invalidate_review(
+                        ticket_id,
+                        workspace_id,
+                        "代码仓库提交版本已变化，需要重新核对影响分析。",
+                    )
+                    await NotificationService.emit(
+                        workspace_id=workspace_id,
+                        event_type="analysis.stale",
+                        title=f"{ticket.get('key', ticket_id)} 分析已过期",
+                        message="关联代码仓库的提交版本发生变化。",
+                        resource_type="ticket",
+                        resource_id=ticket_id,
+                        details={"source": "code", "code_source_id": source_id},
+                    )
 
             return snapshot
 
@@ -184,7 +227,12 @@ class CodebaseService:
             if "tree" in tree_data:
                 for item in tree_data["tree"]:
                     if item["type"] == "blob":
-                        files.append({"path": item["path"], "mode": item["mode"], "size": item.get("size", 0)})
+                        files.append({
+                            "path": item["path"],
+                            "mode": item["mode"],
+                            "size": item.get("size", 0),
+                            "blob_url": item.get("url", ""),
+                        })
 
             total_files = len(files)
             total_bytes = sum(f.get("size", 0) for f in files)
@@ -193,6 +241,37 @@ class CodebaseService:
                 "files": [f["path"] for f in files[:1000]],
                 "dirs": sorted(set("/".join(f["path"].split("/")[:-1]) for f in files if "/" in f["path"])),
             }
+            source_extensions = {
+                ".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".go", ".rs",
+                ".rb", ".php", ".cs", ".sql", ".graphql", ".gql", ".proto",
+            }
+            source_files = [
+                item for item in files
+                if any(item["path"].lower().endswith(ext) for ext in source_extensions)
+                and item.get("size", 0) <= 256_000
+                and item.get("blob_url")
+            ][:200]
+            semaphore = asyncio.Semaphore(10)
+
+            async def fetch_index(item: dict) -> Optional[dict]:
+                async with semaphore:
+                    response = await client.get(item["blob_url"], headers=headers)
+                if response.status_code != 200:
+                    return None
+                payload = response.json()
+                if payload.get("encoding") != "base64" or not payload.get("content"):
+                    return None
+                try:
+                    text = base64.b64decode(payload["content"]).decode("utf-8", errors="ignore")
+                except Exception:
+                    return None
+                entry = index_source_text(item["path"], text)
+                entry["line_count"] = text.count("\n") + (1 if text else 0)
+                return entry
+
+            indexed = await asyncio.gather(*(fetch_index(item) for item in source_files))
+            code_index = [entry for entry in indexed if entry]
+            total_lines = sum(entry.get("line_count", 0) for entry in code_index)
         snapshot = {
             "code_source_id": source["id"],
             "branch": branch,
@@ -201,13 +280,27 @@ class CodebaseService:
             "language_breakdown": lang_data,
             "total_files": total_files,
             "total_bytes": total_bytes,
-            "total_lines": 0,  # Not estimated — use total_bytes for accuracy
+            "total_lines": total_lines,
+            "code_index": code_index,
             "scanned_at": datetime.now(timezone.utc).isoformat(),
         }
         return snapshot
 
     @classmethod
     async def _scan_generic(cls, source: dict) -> dict:
+        if source.get("provider") == "local":
+            try:
+                scanned = await asyncio.to_thread(
+                    scan_local_repository,
+                    source["repo_url"],
+                    source.get("default_branch"),
+                )
+                return {
+                    **scanned,
+                    "code_source_id": source["id"],
+                }
+            except Exception as exc:
+                raise CodebaseError(f"Local repository scan failed: {exc}") from exc
         return {
             "code_source_id": source["id"],
             "branch": source.get("default_branch", "main"),
@@ -215,6 +308,7 @@ class CodebaseService:
             "file_tree": {"files": [], "dirs": [], "note": f"Full scan not available for {source['provider']}."},
             "language_breakdown": {},
             "total_files": 0, "total_lines": 0,
+            "code_index": [],
             "scanned_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -243,6 +337,11 @@ class CodebaseService:
             snapshot = snap
 
         files = snapshot.get("file_tree", {}).get("files", [])
+        code_index = {
+            entry.get("path"): entry
+            for entry in snapshot.get("code_index", [])
+            if entry.get("path")
+        }
         if not files:
             impact_data = {
                 "code_source_id": source_id, "ticket_id": ticket_id, "sprint_id": sprint_id,
@@ -262,8 +361,27 @@ class CodebaseService:
         for fpath in files:
             path_lower = fpath.lower()
             matched_keywords = [kw for kw in keywords if kw in path_lower]
-            if matched_keywords:
-                confidence = min(0.5 + 0.1 * len(matched_keywords), 0.95)
+            index_entry = code_index.get(fpath, {})
+            symbol_matches = [
+                symbol for symbol in index_entry.get("symbols", [])
+                if any(keyword in symbol.lower() for keyword in keywords)
+            ]
+            route_matches = [
+                route for route in index_entry.get("routes", [])
+                if any(keyword in route.lower() for keyword in keywords)
+            ]
+            term_matches = [
+                keyword for keyword in keywords
+                if keyword in set(index_entry.get("searchable_terms", []))
+            ]
+            if matched_keywords or symbol_matches or route_matches or term_matches:
+                evidence_score = (
+                    len(matched_keywords) * 2
+                    + len(symbol_matches) * 3
+                    + len(route_matches) * 3
+                    + min(len(term_matches), 4)
+                )
+                confidence = min(0.35 + 0.08 * evidence_score, 0.98)
                 change_type = "modify"
                 if "test" in path_lower:
                     change_type = "test"
@@ -271,24 +389,41 @@ class CodebaseService:
                     change_type = "create"
                 elif "config" in path_lower:
                     change_type = "config"
-                affected.append({"path": fpath, "change_type": change_type,
-                                 "confidence": round(confidence, 2),
-                                 "matched_keywords": matched_keywords[:5]})
+                reasons = []
+                if matched_keywords:
+                    reasons.append(f"文件路径匹配：{', '.join(matched_keywords[:5])}")
+                if symbol_matches:
+                    reasons.append(f"代码符号匹配：{', '.join(symbol_matches[:5])}")
+                if route_matches:
+                    reasons.append(f"路由匹配：{', '.join(route_matches[:5])}")
+                if term_matches:
+                    reasons.append(f"文件内容匹配：{', '.join(term_matches[:5])}")
+                affected.append({
+                    "path": fpath,
+                    "change_type": change_type,
+                    "confidence": round(confidence, 2),
+                    "matched_keywords": matched_keywords[:5],
+                    "symbols": symbol_matches[:10],
+                    "routes": route_matches[:10],
+                    "imports": index_entry.get("imports", [])[:20],
+                    "reasons": reasons,
+                })
 
         affected.sort(key=lambda x: x["confidence"], reverse=True)
         affected = affected[:20]
 
         changed_dirs = set("/".join(a["path"].split("/")[:-1]) for a in affected if "/" in a["path"])
         summary = (
-            f"Impact analysis found {len(affected)} potentially affected files "
-            f"across {len(changed_dirs)} directories. "
-            f"Top areas: {', '.join(sorted(changed_dirs)[:5])}."
-        ) if affected else "No specific files matched."
+            f"识别到 {len(affected)} 个可能受影响文件，分布在 {len(changed_dirs)} 个目录。"
+            f"重点区域：{', '.join(sorted(changed_dirs)[:5]) or '仓库根目录'}。"
+        ) if affected else "未在路径、代码符号、路由或文件内容中找到明确匹配。"
 
         impact_id = CodeImpactStore._persist_next_id()
         impact = {
             "id": impact_id, "code_source_id": source_id, "ticket_id": ticket_id,
             "sprint_id": sprint_id, "affected_files": affected, "summary": summary,
+            "source_commit_sha": snapshot.get("commit_sha"),
+            "analysis_method": "path-symbol-route-content",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         return await CodeImpactStore._persist_add(impact)
@@ -306,4 +441,4 @@ class CodebaseService:
         # Filter by workspace through the code source chain
         filtered = [i for i in impacts
                     if (CodeSourceStore.get(i.get("code_source_id")) or {}).get("workspace_id") == workspace_id]
-        return filtered[0] if filtered else None
+        return max(filtered, key=lambda item: item.get("created_at", "")) if filtered else None

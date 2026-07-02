@@ -1041,3 +1041,32 @@ textarea {
     padding-inline: 18px;
   }
 }
+.job-progress {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8edf4;
+}
+
+.job-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #1677e8;
+  transition: width 200ms ease;
+}
+
+.notification-row {
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  text-align: left;
+  cursor: pointer;
+}
+
+.notification-row.is-read {
+  opacity: .68;
+}
+
+.notification-row small {
+  color: var(--color-text-muted);
+}

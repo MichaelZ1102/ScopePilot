@@ -1,18 +1,21 @@
 import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { LoaderCircle, ScanSearch } from 'lucide-react'
 
-import { login, register } from '../lib/api'
+import { acceptInvite, login, register } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import { getApiErrorMessage } from '../lib/client'
 
 export default function LoginPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { t } = useTranslation()
   const { checkAuth } = useAuth()
   const [isRegister, setIsRegister] = useState(false)
-  const [email, setEmail] = useState('')
+  const inviteToken = searchParams.get('token') || ''
+  const isInvite = Boolean(inviteToken)
+  const [email, setEmail] = useState(searchParams.get('email') || '')
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -23,7 +26,9 @@ export default function LoginPage() {
     setError('')
     setLoading(true)
     try {
-      if (isRegister) {
+      if (isInvite) {
+        await acceptInvite(email, inviteToken, name, password)
+      } else if (isRegister) {
         await register(email, name, password)
       } else {
         await login(email, password)
@@ -53,8 +58,8 @@ export default function LoginPage() {
 
       <section className="auth-main">
         <form className="auth-form" onSubmit={handleSubmit}>
-          <span className="workspace-kicker">{isRegister ? 'Create Workspace Account' : 'Welcome Back'}</span>
-          <h2>{isRegister ? '创建账号' : '登录 ScopePilot'}</h2>
+          <span className="workspace-kicker">{isInvite ? 'Accept Workspace Invite' : isRegister ? 'Create Workspace Account' : 'Welcome Back'}</span>
+          <h2>{isInvite ? '接受团队邀请' : isRegister ? '创建账号' : '登录 ScopePilot'}</h2>
           <p>{t('login.subtitle')}</p>
 
           {error && <div className="inline-error">{error}</div>}
@@ -64,7 +69,7 @@ export default function LoginPage() {
             <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t('login.placeholder_email')} required autoComplete="email" />
           </label>
 
-          {isRegister && (
+          {(isRegister || isInvite) && (
             <label className="form-field">
               <span>{t('login.name')}</span>
               <input type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder={t('login.placeholder_name')} required autoComplete="name" />
@@ -73,15 +78,15 @@ export default function LoginPage() {
 
           <label className="form-field">
             <span>{t('login.password')}</span>
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t('login.placeholder_password')} required minLength={4} autoComplete={isRegister ? 'new-password' : 'current-password'} />
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t('login.placeholder_password')} required minLength={8} autoComplete={isRegister || isInvite ? 'new-password' : 'current-password'} />
           </label>
 
           <button className="button button-primary" type="submit" disabled={loading}>
             {loading && <LoaderCircle className="spin" size={16} />}
-            {loading ? t('login.loading') : isRegister ? t('login.submit_register') : t('login.submit_login')}
+            {loading ? t('login.loading') : isInvite ? '加入工作区' : isRegister ? t('login.submit_register') : t('login.submit_login')}
           </button>
 
-          <button
+          {!isInvite && <button
             className="auth-toggle"
             type="button"
             onClick={() => {
@@ -90,7 +95,7 @@ export default function LoginPage() {
             }}
           >
             {isRegister ? t('login.toggle_login') : t('login.toggle_register')}
-          </button>
+          </button>}
         </form>
       </section>
     </main>

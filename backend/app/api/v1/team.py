@@ -3,7 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel, Field, field_validator
 from typing import Annotated, Literal, Optional
 
-from ...services import get_current_user
+from ...services import get_current_actor, get_current_user, require_roles
+from ...services.lifecycle import LifecycleService
 from ...services.team import TeamService, TeamError
 
 router = APIRouter()
@@ -75,7 +76,7 @@ async def get_billing(token_data: dict = Depends(get_current_user)):
 @router.post("/billing/upgrade")
 async def upgrade_tier(
     data: UpgradeRequest,
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin")),
 ):
     """Upgrade workspace to a paid tier."""
     try:
@@ -95,19 +96,33 @@ async def get_usage(token_data: dict = Depends(get_current_user)):
     return await TeamService.get_usage(token_data.get("workspace_id"))
 
 
+@router.get("/audit-logs")
+async def list_audit_logs(
+    token_data: dict = Depends(require_roles("admin")),
+):
+    """List workspace audit events for administrators."""
+    return LifecycleService.list_audit_logs(token_data.get("workspace_id"))
+
+
 # ── Members ───────────────────────────────────────────────────────────────
 
 
 @router.get("/members")
-async def list_members(token_data: dict = Depends(get_current_user)):
+async def list_members(token_data: dict = Depends(get_current_actor)):
     """List all workspace members."""
-    return TeamService.list_members(token_data.get("workspace_id"))
+    members = TeamService.list_members(token_data.get("workspace_id"))
+    if token_data.get("role") == "admin":
+        return members
+    return [
+        {key: value for key, value in member.items() if key != "invite_token"}
+        for member in members
+    ]
 
 
 @router.post("/members", status_code=201)
 async def add_member(
     data: MemberAddRequest,
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin")),
 ):
     """Add a team member to the workspace."""
     try:
@@ -126,7 +141,7 @@ async def add_member(
 async def update_member_role(
     member_id: Annotated[int, Path(gt=0)],
     data: MemberRoleUpdate,
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin")),
 ):
     """Change a member's role."""
     member = await TeamService.update_member_role(
@@ -140,7 +155,7 @@ async def update_member_role(
 @router.delete("/members/{member_id}", status_code=204)
 async def remove_member(
     member_id: Annotated[int, Path(gt=0)],
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin")),
 ):
     """Remove a member from the workspace."""
     if not await TeamService.remove_member(token_data.get("workspace_id"), member_id):
@@ -153,20 +168,38 @@ async def remove_member(
 @router.post("/share", status_code=201)
 async def share_report(
     data: ShareRequest,
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin", "member")),
 ):
     """Create a shareable report link."""
     workspace_id = token_data.get("workspace_id")
     _verify_sprint_access(data.sprint_id, workspace_id)
+    from ...services.reporting import ReportingService
+    snapshot = ReportingService.latest_published_snapshot(workspace_id, data.sprint_id)
+    if not snapshot:
+        raise HTTPException(
+            status_code=409,
+            detail="Publish an approved Sprint report before sharing it.",
+        )
     try:
-        return await TeamService.share_report(
+        shared = await TeamService.share_report(
             workspace_id=workspace_id,
             sprint_id=data.sprint_id,
             title=data.title,
             shared_by=data.shared_by or token_data.get("sub", ""),
             expires_in_days=data.expires_in_days,
             password=data.password,
+            snapshot_id=snapshot["id"],
         )
+        await LifecycleService.audit(
+            workspace_id=workspace_id,
+            actor_id=token_data.get("user_id"),
+            actor_name=token_data.get("name", token_data.get("sub", "")),
+            action="report.share",
+            resource_type="sprint",
+            resource_id=data.sprint_id,
+            details={"share_id": shared["id"], "snapshot_id": snapshot["id"]},
+        )
+        return shared
     except TeamError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -193,15 +226,18 @@ async def access_shared_report(
         report = await TeamService.get_shared_report(share_token, data.password)
         if not report:
             raise HTTPException(status_code=404, detail="Shared report not found or expired")
-        try:
-            from .reports import _build_report
-            report["content"] = _build_report(
-                report["sprint_id"],
-                {"workspace_id": report["workspace_id"]},
-            )
-        except HTTPException as exc:
+        from ...services.lifecycle import ReportSnapshotStore
+        snapshot = ReportSnapshotStore.get(report.get("snapshot_id"))
+        if (
+            snapshot
+            and snapshot.get("workspace_id") == report.get("workspace_id")
+            and snapshot.get("status") == "published"
+        ):
+            report["content"] = snapshot.get("content", "")
+            report["report_version"] = snapshot.get("version")
+        else:
             report["content"] = ""
-            report["content_error"] = exc.detail
+            report["content_error"] = "Published report snapshot is unavailable."
         return report
     except TeamError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -210,7 +246,7 @@ async def access_shared_report(
 @router.delete("/shared/{share_id}", status_code=204)
 async def revoke_share(
     share_id: Annotated[int, Path(gt=0)],
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin", "member")),
 ):
     """Revoke a shared report link."""
     if not await TeamService.revoke_share(token_data.get("workspace_id"), share_id):

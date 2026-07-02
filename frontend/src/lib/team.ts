@@ -1,4 +1,5 @@
 import api from './client'
+import type { AuditLog } from './types'
 
 export async function listMembers() { const r = await api.get('/team/members'); return r.data }
 export async function addMember(email: string, name: string, role?: string) { const r = await api.post('/team/members', { email, name, role: role || 'member' }); return r.data }
@@ -12,3 +13,4 @@ export async function shareReport(sprintId: number, title: string, password?: st
 export async function listSharedReports() { const r = await api.get('/team/shared'); return r.data }
 export async function accessSharedReport(token: string, password?: string) { const r = await api.post(`/team/shared/access/${token}`, { password: password || '' }); return r.data }
 export async function revokeShare(shareId: number) { await api.delete(`/team/shared/${shareId}`) }
+export async function listAuditLogs() { const r = await api.get('/team/audit-logs'); return r.data as AuditLog[] }

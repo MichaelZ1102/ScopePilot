@@ -61,23 +61,47 @@ def load_persisted_data():
     """Load all SqliteStore-backed data from SQLite into memory."""
     from .services.jira import SprintStore, TicketStore
     from .services.analysis import AnalysisJobStore
+    from .services.lifecycle import (
+        AnalysisRunStore,
+        TicketReviewStore,
+        TicketArtifactLinkStore,
+        ReportSnapshotStore,
+        SyncRunStore,
+        AuditLogStore,
+        ReportCommentStore,
+        ActionItemStore,
+        DeliveryLinkStore,
+    )
     from .services.codebase import CodeSourceStore, RepoSnapshotStore, CodeImpactStore
-    from .services.api_test_planner import ApiSpecStore, TestPlanStore
+    from .services.api_test_planner import ApiImpactStore, ApiSpecStore, TestPlanStore
     from .services.figma import FigmaAnalysisStore
     from .services.team import TeamMemberStore, UsageRecordStore, SharedReportStore, BillingStore
+    from .services.notifications import NotificationStore, WebhookSubscriptionStore
     from .api.v1.projects import ProjectStore
     from .api.v1.auth import UserStore, WorkspaceStore
 
     stores = [
         ("sprints", SprintStore), ("tickets", TicketStore),
         ("analysis_jobs", AnalysisJobStore),
+        ("analysis_runs", AnalysisRunStore),
+        ("ticket_reviews", TicketReviewStore),
+        ("ticket_artifact_links", TicketArtifactLinkStore),
+        ("report_snapshots", ReportSnapshotStore),
+        ("sync_runs", SyncRunStore),
+        ("audit_logs", AuditLogStore),
+        ("report_comments", ReportCommentStore),
+        ("action_items", ActionItemStore),
+        ("delivery_links", DeliveryLinkStore),
         ("code_sources", CodeSourceStore), ("repo_snapshots", RepoSnapshotStore),
         ("code_impacts", CodeImpactStore),
         ("api_specs", ApiSpecStore), ("test_plans", TestPlanStore),
+        ("api_impacts", ApiImpactStore),
         ("figma_analyses", FigmaAnalysisStore),
         ("team_members", TeamMemberStore), ("usage_records", UsageRecordStore),
         ("billing", BillingStore),
         ("shared_reports", SharedReportStore),
+        ("notifications", NotificationStore),
+        ("webhook_subscriptions", WebhookSubscriptionStore),
         ("projects", ProjectStore),
         ("auth_users", UserStore), ("auth_workspaces", WorkspaceStore),
     ]
@@ -93,6 +117,37 @@ def load_persisted_data():
 
     if migrated_count:
         logger.info(f"Migrated {migrated_count} entities from JSON to SQLite")
+
+    # Backfill workspace owners created before team membership was persisted.
+    from .database import _upsert
+    existing_member_emails = {
+        (member.get("workspace_id"), member.get("email", "").lower())
+        for member in TeamMemberStore.list_all()
+    }
+    for user in UserStore.list_all():
+        identity = (user.get("workspace_id"), user.get("email", "").lower())
+        if identity in existing_member_emails:
+            continue
+        member_id = TeamMemberStore._persist_next_id()
+        member = {
+            "id": member_id,
+            "workspace_id": user.get("workspace_id"),
+            "email": user.get("email", "").lower(),
+            "name": user.get("name", ""),
+            "role": user.get("role", "viewer"),
+            "status": "active",
+            "invite_token": "",
+            "invited_by": "",
+            "invited_at": "",
+            "joined_at": "",
+        }
+        TeamMemberStore._store[member_id] = member
+        _upsert(
+            TeamMemberStore._entity_name,
+            member_id,
+            {key: value for key, value in member.items() if key != "id"},
+        )
+        existing_member_emails.add(identity)
 
     # Rebuild email index for auth
     from .api.v1.auth import _rebuild_email_index

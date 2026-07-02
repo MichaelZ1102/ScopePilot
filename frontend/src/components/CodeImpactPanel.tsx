@@ -14,9 +14,10 @@ interface Props {
   sprintId: number
   summary: string
   description?: string
+  readOnly?: boolean
 }
 
-export default function CodeImpactPanel({ ticketId, sprintId, summary, description }: Props) {
+export default function CodeImpactPanel({ ticketId, sprintId, summary, description, readOnly = false }: Props) {
   const [sources, setSources] = useState<CodeSource[]>([])
   const [impact, setImpact] = useState<CodeImpact | null>(null)
   const [loading, setLoading] = useState(false)
@@ -69,10 +70,12 @@ export default function CodeImpactPanel({ ticketId, sprintId, summary, descripti
           <h3>代码影响</h3>
           <p>根据 Ticket 内容定位可能需要修改的文件和模块。</p>
         </div>
-        <button className="button button-secondary section-action" type="button" onClick={openSourcePicker} disabled={loading}>
-          {loading ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
-          {impact ? '重新分析' : '选择代码源分析'}
-        </button>
+        {!readOnly && (
+          <button className="button button-secondary section-action" type="button" onClick={openSourcePicker} disabled={loading}>
+            {loading ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
+            {impact ? '重新分析' : '选择代码源分析'}
+          </button>
+        )}
       </div>
 
       {error && <div className="inline-error">{error}</div>}
@@ -87,6 +90,7 @@ export default function CodeImpactPanel({ ticketId, sprintId, summary, descripti
                 <code>{file.path}</code>
                 <span className="change-badge">{file.change_type}</span>
                 <span className="confidence">{Math.round(file.confidence * 100)}%</span>
+                {file.reasons?.length ? <small>{file.reasons.join('；')}</small> : null}
               </div>
             ))}
             {(impact.affected_files || []).length === 0 && (
@@ -99,9 +103,7 @@ export default function CodeImpactPanel({ ticketId, sprintId, summary, descripti
           <Code2 size={28} />
           <strong>尚未生成代码影响分析</strong>
           <span>先在 Codebase 页面添加并扫描代码源，然后从这里开始分析。</span>
-          <button className="button button-primary" type="button" onClick={openSourcePicker} disabled={loading}>
-            选择代码源
-          </button>
+          {!readOnly && <button className="button button-primary" type="button" onClick={openSourcePicker} disabled={loading}>选择代码源</button>}
         </div>
       )}
 

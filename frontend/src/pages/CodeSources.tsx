@@ -14,13 +14,17 @@ import {
   deleteCodeSource,
   getLatestSnapshot,
   listCodeSources,
+  listProjects,
   scanRepository,
   type CodeSource,
+  type Project,
   type RepoSnapshot,
 } from '../lib/api'
 import { getApiErrorMessage } from '../lib/client'
+import { useAuth } from '../lib/AuthContext'
 
 const emptyForm = {
+  project_id: '',
   name: '',
   provider: 'github',
   repo_url: '',
@@ -29,7 +33,9 @@ const emptyForm = {
 }
 
 export default function CodeSources() {
+  const { user } = useAuth()
   const [sources, setSources] = useState<CodeSource[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [snapshots, setSnapshots] = useState<Record<number, RepoSnapshot | null>>({})
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -41,8 +47,9 @@ export default function CodeSources() {
 
   async function loadSources() {
     try {
-      const loadedSources = await listCodeSources()
+      const [loadedSources, loadedProjects] = await Promise.all([listCodeSources(), listProjects()])
       setSources(loadedSources)
+      setProjects(loadedProjects)
       const entries = await Promise.all(
         loadedSources.map(async (source) => {
           try {
@@ -63,7 +70,7 @@ export default function CodeSources() {
   async function handleCreate() {
     setCreating(true)
     try {
-      await createCodeSource(form)
+      await createCodeSource({ ...form, project_id: Number(form.project_id) })
       setShowCreate(false)
       setForm(emptyForm)
       await loadSources()
@@ -105,6 +112,7 @@ export default function CodeSources() {
       </div>
     )
   }
+  const canWrite = user?.role === 'admin' || user?.role === 'member'
 
   return (
     <div className="workspace-page">
@@ -115,10 +123,10 @@ export default function CodeSources() {
           <p>连接代码仓库并生成快照，为 Ticket 分析提供文件、语言和提交证据。</p>
         </div>
         <div className="workspace-header-actions">
-          <button className="button button-primary" type="button" onClick={() => setShowCreate(true)}>
+          {canWrite && <button className="button button-primary" type="button" onClick={() => setShowCreate(true)}>
             <Plus size={17} />
             添加代码源
-          </button>
+          </button>}
         </div>
       </header>
 
@@ -127,10 +135,10 @@ export default function CodeSources() {
           <span className="empty-state-icon"><Braces size={23} /></span>
           <h2>连接第一个代码仓库</h2>
           <p>支持 GitHub、GitLab、Bitbucket 和本地仓库。扫描后可将文件结构关联到单个 Ticket。</p>
-          <button className="button button-primary" type="button" onClick={() => setShowCreate(true)}>
+          {canWrite && <button className="button button-primary" type="button" onClick={() => setShowCreate(true)}>
             <Plus size={16} />
             添加代码源
-          </button>
+          </button>}
         </section>
       ) : (
         <section className="resource-grid">
@@ -143,6 +151,7 @@ export default function CodeSources() {
                   <div>
                     <h2>{source.name}</h2>
                     <p>{source.provider} / {source.default_branch}</p>
+                    {source.project_id && <small>{projects.find((project) => project.id === source.project_id)?.name || `Project #${source.project_id}`}</small>}
                   </div>
                   <StatusBadge status={source.scan_status} />
                 </div>
@@ -167,7 +176,7 @@ export default function CodeSources() {
                   </div>
                 )}
 
-                <div className="row-actions">
+                {canWrite && <div className="row-actions">
                   <button className="button button-primary button-small" type="button" onClick={() => handleScan(source.id)} disabled={scanningId === source.id}>
                     <RefreshCw className={scanningId === source.id ? 'spin' : ''} size={14} />
                     {scanningId === source.id ? '扫描中' : '扫描仓库'}
@@ -176,14 +185,14 @@ export default function CodeSources() {
                     <Trash2 size={14} />
                     删除
                   </button>
-                </div>
+                </div>}
               </article>
             )
           })}
         </section>
       )}
 
-      {showCreate && (
+      {canWrite && showCreate && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowCreate(false)}>
           <div className="workspace-modal" role="dialog" aria-modal="true" aria-labelledby="create-source-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-header">
@@ -197,6 +206,13 @@ export default function CodeSources() {
             </div>
             <div className="modal-body">
               <div className="form-grid">
+                <label className="form-field is-wide">
+                  <span>所属项目</span>
+                  <select value={form.project_id} onChange={(event) => setForm({ ...form, project_id: event.target.value })} required>
+                    <option value="">选择项目</option>
+                    {projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
+                  </select>
+                </label>
                 <label className="form-field">
                   <span>名称</span>
                   <input type="text" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Backend Repository" />
@@ -227,7 +243,7 @@ export default function CodeSources() {
               </div>
               <div className="modal-actions">
                 <button className="button" type="button" onClick={() => setShowCreate(false)}>取消</button>
-                <button className="button button-primary" type="button" onClick={handleCreate} disabled={creating || !form.name || !form.repo_url}>
+                <button className="button button-primary" type="button" onClick={handleCreate} disabled={creating || !form.project_id || !form.name || !form.repo_url}>
                   {creating ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />}
                   {creating ? '创建中' : '创建代码源'}
                 </button>

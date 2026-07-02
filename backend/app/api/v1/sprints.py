@@ -8,8 +8,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from ...schemas import SprintImportRequest, SprintResponse, SprintDetailResponse
-from ...services import get_current_user
+from ...services import get_current_user, require_roles
 from ...services.jira import JiraService, JiraServiceError
+from ...services.notifications import NotificationService
 from ..v1.projects import _projects  # in-memory project store
 
 router = APIRouter()
@@ -34,7 +35,7 @@ def _get_project(project_id: int, token_data: dict) -> dict:
 @router.post("/import", response_model=SprintDetailResponse, status_code=201)
 async def import_sprint(
     req: SprintImportRequest,
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin", "member")),
 ):
     """Import a Sprint (and its tickets) from Jira.
 
@@ -90,3 +91,39 @@ async def get_sprint(
         raise HTTPException(status_code=404, detail="Sprint not found")
 
     return SprintDetailResponse(**sprint)
+
+
+@router.post("/{sprint_id}/sync")
+async def sync_sprint(
+    sprint_id: Annotated[int, Path(gt=0)],
+    token_data: dict = Depends(require_roles("admin", "member")),
+):
+    """Synchronize an imported Sprint with Jira without creating duplicates."""
+    sprint = JiraService.get_sprint(sprint_id)
+    if sprint is None:
+        raise HTTPException(status_code=404, detail="Sprint not found")
+    project = _get_project(sprint["project_id"], token_data)
+    try:
+        result = await JiraService.sync_sprint(
+            sprint_id,
+            project,
+            token_data.get("workspace_id"),
+        )
+        summary = result.get("summary", {})
+        if summary.get("added") or summary.get("updated") or summary.get("removed"):
+            await NotificationService.emit(
+                workspace_id=token_data.get("workspace_id"),
+                event_type="jira.sync.changed",
+                title=f"{sprint['name']} 已同步",
+                message=(
+                    f"新增 {len(summary.get('added', []))}，"
+                    f"更新 {len(summary.get('updated', []))}，"
+                    f"移除 {len(summary.get('removed', []))}。"
+                ),
+                resource_type="sprint",
+                resource_id=sprint_id,
+                details=summary,
+            )
+        return result
+    except JiraServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

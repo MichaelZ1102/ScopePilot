@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
   Frame,
@@ -14,23 +15,41 @@ import {
   analyzeFigmaDesign,
   deleteFigmaAnalysis,
   listFigmaAnalyses,
+  listProjects,
   type FigmaAnalysis,
+  type Project,
 } from '../lib/api'
 import { getApiErrorMessage } from '../lib/client'
+import { useAuth } from '../lib/AuthContext'
 
 export default function FigmaDesigns() {
+  const { user } = useAuth()
+  const [searchParams] = useSearchParams()
   const [analyses, setAnalyses] = useState<FigmaAnalysis[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [showAnalyze, setShowAnalyze] = useState(false)
-  const [form, setForm] = useState({ figma_url: '', figma_token: '', ticket_summary: '' })
+  const [form, setForm] = useState({
+    figma_url: '',
+    figma_token: '',
+    ticket_summary: searchParams.get('summary') || '',
+    project_id: searchParams.get('project_id') || '',
+    ticket_id: searchParams.get('ticket_id') || '',
+    figma_node_id: '',
+  })
   const [analyzing, setAnalyzing] = useState(false)
   const [viewResult, setViewResult] = useState<FigmaAnalysis | null>(null)
 
   useEffect(() => { loadData() }, [])
+  useEffect(() => {
+    if (searchParams.get('ticket_id') && user?.role !== 'viewer') setShowAnalyze(true)
+  }, [searchParams, user?.role])
 
   async function loadData() {
     try {
-      setAnalyses(await listFigmaAnalyses())
+      const [loadedAnalyses, loadedProjects] = await Promise.all([listFigmaAnalyses(), listProjects()])
+      setAnalyses(loadedAnalyses)
+      setProjects(loadedProjects)
     } catch {
       setAnalyses([])
     } finally {
@@ -41,9 +60,18 @@ export default function FigmaDesigns() {
   async function handleAnalyze() {
     setAnalyzing(true)
     try {
-      const result = await analyzeFigmaDesign(form.figma_url, form.figma_token, form.ticket_summary)
+      const result = await analyzeFigmaDesign(
+        form.figma_url,
+        form.figma_token,
+        form.ticket_summary,
+        {
+          project_id: Number(form.project_id),
+          ticket_id: form.ticket_id ? Number(form.ticket_id) : undefined,
+          figma_node_id: form.figma_node_id,
+        },
+      )
       setShowAnalyze(false)
-      setForm({ figma_url: '', figma_token: '', ticket_summary: '' })
+      setForm({ figma_url: '', figma_token: '', ticket_summary: '', project_id: '', ticket_id: '', figma_node_id: '' })
       await loadData()
       setViewResult(result)
     } catch (error: unknown) {
@@ -72,6 +100,7 @@ export default function FigmaDesigns() {
       </div>
     )
   }
+  const canWrite = user?.role === 'admin' || user?.role === 'member'
 
   return (
     <div className="workspace-page">
@@ -82,24 +111,24 @@ export default function FigmaDesigns() {
           <p>读取 Figma 页面、组件和设计 Token，并评估 Ticket 对前后端实现的影响。</p>
         </div>
         <div className="workspace-header-actions">
-          <button className="button button-primary" type="button" onClick={() => setShowAnalyze(true)}>
+          {canWrite && <button className="button button-primary" type="button" onClick={() => setShowAnalyze(true)}>
             <Sparkles size={17} />
             分析 Figma 设计
-          </button>
+          </button>}
         </div>
       </header>
 
       {viewResult ? (
-        <AnalysisDetail analysis={viewResult} onBack={() => setViewResult(null)} onDelete={handleDelete} />
+        <AnalysisDetail analysis={viewResult} onBack={() => setViewResult(null)} onDelete={canWrite ? handleDelete : undefined} />
       ) : analyses.length === 0 ? (
         <section className="empty-state">
           <span className="empty-state-icon"><PenTool size={23} /></span>
           <h2>开始第一次设计影响分析</h2>
           <p>提供 Figma 文件链接和只读 Token，ScopePilot 会提取设计结构并生成实现影响项。</p>
-          <button className="button button-primary" type="button" onClick={() => setShowAnalyze(true)}>
+          {canWrite && <button className="button button-primary" type="button" onClick={() => setShowAnalyze(true)}>
             <Sparkles size={16} />
             分析 Figma 设计
-          </button>
+          </button>}
         </section>
       ) : (
         <section className="resource-grid">
@@ -110,6 +139,7 @@ export default function FigmaDesigns() {
                 <div>
                   <h2>{analysis.file_name}</h2>
                   <p>{analysis.ai_used ? 'AI 辅助分析' : '规则分析'}</p>
+                  <small>{projects.find((project) => project.id === analysis.project_id)?.name || '未关联项目'}{analysis.ticket_id ? ` · Ticket #${analysis.ticket_id}` : ''}</small>
                 </div>
                 <span className="status-badge is-success">已完成</span>
               </div>
@@ -127,17 +157,17 @@ export default function FigmaDesigns() {
               </div>
               <div className="row-actions">
                 <button className="button button-primary button-small" type="button" onClick={() => setViewResult(analysis)}>查看分析</button>
-                <button className="button button-danger button-small" type="button" onClick={() => handleDelete(analysis.id)}>
+                {canWrite && <button className="button button-danger button-small" type="button" onClick={() => handleDelete(analysis.id)}>
                   <Trash2 size={14} />
                   删除
-                </button>
+                </button>}
               </div>
             </article>
           ))}
         </section>
       )}
 
-      {showAnalyze && (
+      {canWrite && showAnalyze && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowAnalyze(false)}>
           <div className="workspace-modal" role="dialog" aria-modal="true" aria-labelledby="analyze-figma-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-header">
@@ -151,6 +181,17 @@ export default function FigmaDesigns() {
             </div>
             <div className="modal-body">
               <div className="form-grid">
+                <label className="form-field">
+                  <span>所属项目</span>
+                  <select value={form.project_id} onChange={(event) => setForm({ ...form, project_id: event.target.value })} required>
+                    <option value="">选择项目</option>
+                    {projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
+                  </select>
+                </label>
+                <label className="form-field">
+                  <span>Figma Node ID</span>
+                  <input type="text" value={form.figma_node_id} onChange={(event) => setForm({ ...form, figma_node_id: event.target.value })} placeholder="可选，例如 123:456" />
+                </label>
                 <label className="form-field is-wide">
                   <span>Figma 设计链接</span>
                   <input type="url" value={form.figma_url} onChange={(event) => setForm({ ...form, figma_url: event.target.value })} placeholder="https://www.figma.com/design/..." />
@@ -164,10 +205,11 @@ export default function FigmaDesigns() {
                   <span>关联 Ticket 摘要</span>
                   <input type="text" value={form.ticket_summary} onChange={(event) => setForm({ ...form, ticket_summary: event.target.value })} placeholder="可选，例如：新增用户资料编辑页面" />
                 </label>
+                {form.ticket_id && <p className="field-help">将自动关联 Ticket #{form.ticket_id}</p>}
               </div>
               <div className="modal-actions">
                 <button className="button" type="button" onClick={() => setShowAnalyze(false)}>取消</button>
-                <button className="button button-primary" type="button" onClick={handleAnalyze} disabled={analyzing || !form.figma_url || !form.figma_token}>
+                <button className="button button-primary" type="button" onClick={handleAnalyze} disabled={analyzing || !form.project_id || !form.figma_url || !form.figma_token}>
                   {analyzing ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}
                   {analyzing ? '分析中' : '开始分析'}
                 </button>
@@ -183,7 +225,7 @@ export default function FigmaDesigns() {
 function AnalysisDetail({ analysis, onBack, onDelete }: {
   analysis: FigmaAnalysis
   onBack: () => void
-  onDelete: (id: number) => void
+  onDelete?: (id: number) => void
 }) {
   return (
     <section>
@@ -194,14 +236,14 @@ function AnalysisDetail({ analysis, onBack, onDelete }: {
           </button>
           <div>
             <h2>{analysis.file_name}</h2>
-            <p>{analysis.ai_used ? 'AI 辅助设计影响分析' : '规则设计影响分析'}</p>
+            <p>{analysis.ai_used ? 'AI 辅助设计影响分析' : '规则设计影响分析'} · v{analysis.version || 1}</p>
           </div>
         </div>
         <div className="detail-actions">
-          <button className="button button-danger button-small" type="button" onClick={() => onDelete(analysis.id)}>
+          {onDelete && <button className="button button-danger button-small" type="button" onClick={() => onDelete(analysis.id)}>
             <Trash2 size={14} />
             删除分析
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -210,6 +252,17 @@ function AnalysisDetail({ analysis, onBack, onDelete }: {
         <div className="metric-item"><span>文本节点</span><strong>{analysis.text_node_count}</strong></div>
         <div className="metric-item"><span>实现影响项</span><strong>{analysis.implications.length}</strong></div>
       </div>
+
+      {analysis.changes && (analysis.changes.added_frames.length > 0 || analysis.changes.removed_frames.length > 0 || analysis.changes.changed_frames.length > 0) && (
+        <section className="workspace-panel">
+          <div className="panel-header"><div><h2>与上一版本的差异</h2><p>按 Figma 节点 ID 比较页面和组件结构。</p></div></div>
+          <div className="detail-stack" style={{ padding: 12 }}>
+            <div className="detail-card"><h3>新增</h3><p>{analysis.changes.added_frames.join('、') || '无'}</p></div>
+            <div className="detail-card"><h3>变更</h3><p>{analysis.changes.changed_frames.join('、') || '无'}</p></div>
+            <div className="detail-card"><h3>移除</h3><p>{analysis.changes.removed_frames.join('、') || '无'}</p></div>
+          </div>
+        </section>
+      )}
 
       <section className="workspace-panel">
         <div className="panel-header">

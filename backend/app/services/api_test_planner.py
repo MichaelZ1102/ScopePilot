@@ -3,6 +3,7 @@
 Phase 3: In-memory store persisted to local JSON via SqliteStore.
 """
 import json
+import hashlib
 import logging
 import re
 from datetime import datetime, timezone
@@ -29,8 +30,15 @@ class TestPlanStore(SqliteStore):
     _next_id: int = 1
 
 
+class ApiImpactStore(SqliteStore):
+    _entity_name = "api_impacts"
+    _store: dict[int, dict] = {}
+    _next_id: int = 1
+
+
 _api_specs = ApiSpecStore._store
 _test_plans = TestPlanStore._store
+_api_impacts = ApiImpactStore._store
 
 
 class ApiTestPlanError(Exception):
@@ -78,7 +86,14 @@ class ApiTestPlannerService:
     # ── Spec Management ──────────────────────────────────────────────────
 
     @classmethod
-    async def create_spec_from_url(cls, url: str, name: str, workspace_id: int) -> dict:
+    async def create_spec_from_url(
+        cls,
+        url: str,
+        name: str,
+        workspace_id: int,
+        project_id: Optional[int] = None,
+        service_name: str = "",
+    ) -> dict:
         """Fetch and parse an OpenAPI spec from a URL."""
         try:
             resp = httpx.get(url, follow_redirects=True, timeout=30)
@@ -87,15 +102,45 @@ class ApiTestPlannerService:
         except Exception as e:
             raise ApiTestPlanError(f"Failed to fetch spec from {url}: {e}")
 
-        return await cls._store_spec(raw, url, name, workspace_id)
+        return await cls._store_spec(
+            raw,
+            url,
+            name,
+            workspace_id,
+            project_id=project_id,
+            service_name=service_name,
+        )
 
     @classmethod
-    async def create_spec_from_content(cls, content: str, name: str, source: str, workspace_id: int) -> dict:
+    async def create_spec_from_content(
+        cls,
+        content: str,
+        name: str,
+        source: str,
+        workspace_id: int,
+        project_id: Optional[int] = None,
+        service_name: str = "",
+    ) -> dict:
         """Parse an inline OpenAPI spec."""
-        return await cls._store_spec(content, source, name, workspace_id)
+        return await cls._store_spec(
+            content,
+            source,
+            name,
+            workspace_id,
+            project_id=project_id,
+            service_name=service_name,
+        )
 
     @classmethod
-    async def _store_spec(cls, raw: str, source: str, name: str, workspace_id: int) -> dict:
+    async def _store_spec(
+        cls,
+        raw: str,
+        source: str,
+        name: str,
+        workspace_id: int,
+        project_id: Optional[int] = None,
+        service_name: str = "",
+    ) -> dict:
         # Parse JSON or YAML
         parsed = cls._parse_openapi(raw)
         if not parsed or not isinstance(parsed, dict):
@@ -103,10 +148,51 @@ class ApiTestPlannerService:
 
         # Extract endpoints
         endpoints = cls._extract_endpoints(parsed)
+        previous = max(
+            (
+                item for item in _api_specs.values()
+                if item.get("workspace_id") == workspace_id
+                and item.get("project_id") == project_id
+                and (
+                    (service_name and item.get("service_name") == service_name)
+                    or (not service_name and item.get("name") == name)
+                )
+            ),
+            key=lambda item: item.get("created_at", ""),
+            default=None,
+        )
+        current_endpoint_map = {
+            (endpoint.method, endpoint.path): endpoint.model_dump()
+            for endpoint in endpoints
+        }
+        previous_endpoint_map = {
+            (item.get("method"), item.get("path")): item
+            for item in (previous or {}).get("endpoints", [])
+        }
+        changes = {
+            "added": [
+                f"{method} {path}"
+                for method, path in current_endpoint_map
+                if (method, path) not in previous_endpoint_map
+            ],
+            "removed": [
+                f"{method} {path}"
+                for method, path in previous_endpoint_map
+                if (method, path) not in current_endpoint_map
+            ],
+            "changed": [
+                f"{method} {path}"
+                for (method, path), item in current_endpoint_map.items()
+                if (method, path) in previous_endpoint_map
+                and item != previous_endpoint_map[(method, path)]
+            ],
+        }
 
         spec = {
             "id": ApiSpecStore._persist_next_id(),
             "workspace_id": workspace_id,
+            "project_id": project_id,
+            "service_name": service_name,
             "name": name,
             "source": source,
             "version": parsed.get("info", {}).get("version", "unknown"),
@@ -115,9 +201,68 @@ class ApiTestPlannerService:
             "endpoints": [e.model_dump() for e in endpoints],
             "endpoint_count": len(endpoints),
             "raw_spec": raw[:50000],
+            "content_hash": hashlib.sha256(raw.encode()).hexdigest(),
+            "revision": (previous or {}).get("revision", 0) + 1,
+            "previous_spec_id": (previous or {}).get("id"),
+            "changes": changes,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        return await ApiSpecStore._persist_add(spec)
+        saved = await ApiSpecStore._persist_add(spec)
+        if previous and previous.get("content_hash") != spec["content_hash"]:
+            await cls._mark_spec_dependents_stale(previous["id"], workspace_id)
+        return saved
+
+    @classmethod
+    async def _mark_spec_dependents_stale(cls, spec_id: int, workspace_id: int) -> None:
+        from .jira import TicketStore
+        from .lifecycle import LifecycleService, TicketArtifactLinkStore
+        from .notifications import NotificationService
+        now = datetime.now(timezone.utc).isoformat()
+        related_plan_ids = {
+            plan["id"] for plan in TestPlanStore.list_by("spec_id", spec_id)
+        }
+        related_impact_ids = {
+            impact["id"] for impact in ApiImpactStore.list_by("spec_id", spec_id)
+        }
+        ticket_ids = set()
+        for link in TicketArtifactLinkStore.list_by("workspace_id", workspace_id):
+            if (
+                link.get("artifact_type") == "api_spec"
+                and link.get("artifact_id") == spec_id
+            ) or (
+                link.get("artifact_type") == "test_plan"
+                and link.get("artifact_id") in related_plan_ids
+            ) or (
+                link.get("artifact_type") == "api_impact"
+                and link.get("artifact_id") in related_impact_ids
+            ):
+                ticket_ids.add(link.get("ticket_id"))
+        for ticket_id in ticket_ids:
+            ticket = TicketStore.get(ticket_id)
+            if not ticket or not ticket.get("analysis_data"):
+                continue
+            await TicketStore.update_fields(
+                ticket_id,
+                {
+                    "analysis_status": "stale",
+                    "analysis_stale_at": now,
+                    "updated_at": now,
+                },
+            )
+            await LifecycleService.invalidate_review(
+                ticket_id,
+                workspace_id,
+                "OpenAPI 规范已更新，需要重新核验 API 影响。",
+            )
+            await NotificationService.emit(
+                workspace_id=workspace_id,
+                event_type="analysis.stale",
+                title=f"{ticket.get('key', ticket_id)} 分析已过期",
+                message="关联 OpenAPI 规范已更新。",
+                resource_type="ticket",
+                resource_id=ticket_id,
+                details={"source": "openapi", "spec_id": spec_id},
+            )
 
     @classmethod
     def list_specs(cls, workspace_id: int) -> list[dict]:
@@ -131,14 +276,139 @@ class ApiTestPlannerService:
         return None
 
     @classmethod
+    async def analyze_ticket_impact(
+        cls,
+        spec_id: int,
+        ticket: dict,
+        sprint: dict,
+        workspace_id: int,
+    ) -> dict:
+        """Compare Ticket API candidates with a concrete OpenAPI specification."""
+        spec = cls.get_spec(spec_id, workspace_id)
+        if not spec:
+            raise ApiTestPlanError("API spec not found")
+        if spec.get("project_id") is not None and spec.get("project_id") != sprint.get("project_id"):
+            raise ApiTestPlanError("API spec belongs to another project")
+
+        analysis = ticket.get("analysis_data") or {}
+        candidates = analysis.get("api_candidates") or []
+        endpoints = spec.get("endpoints") or []
+        endpoint_index = {
+            (item.get("method", "").upper(), item.get("path", "")): item
+            for item in endpoints
+        }
+        impacts = []
+        for candidate in candidates:
+            match = re.search(
+                r"\b(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+([^\s,;]+)",
+                str(candidate),
+                flags=re.IGNORECASE,
+            )
+            if not match:
+                impacts.append({
+                    "candidate": str(candidate),
+                    "method": "",
+                    "path": "",
+                    "change_type": "unresolved",
+                    "confirmation": "ai_inference",
+                    "evidence": "候选接口格式无法与 OpenAPI Method/Path 对照",
+                })
+                continue
+            method = match.group(1).upper()
+            path = match.group(2).strip("`'\"()[]{}.,;:")
+            endpoint = endpoint_index.get((method, path))
+            impacts.append({
+                "candidate": str(candidate),
+                "method": method,
+                "path": path,
+                "change_type": "modify_or_reuse" if endpoint else "create",
+                "confirmation": "spec_confirmed" if endpoint else "not_in_spec",
+                "evidence": (
+                    endpoint.get("summary")
+                    or endpoint.get("description")
+                    or "OpenAPI 中存在同 Method/Path"
+                ) if endpoint else "当前 OpenAPI 中不存在该 Method/Path",
+                "request_body": endpoint.get("request_body") if endpoint else None,
+                "responses": endpoint.get("responses") if endpoint else {},
+                "security": endpoint.get("security") if endpoint else [],
+            })
+
+        breaking_changes = []
+        if any(item.get("confirmation") == "spec_confirmed" for item in impacts):
+            for rule in analysis.get("validation_rules") or []:
+                breaking_changes.append({
+                    "type": "validation",
+                    "level": "potential",
+                    "description": rule,
+                })
+            for rule in analysis.get("permission_rules") or []:
+                breaking_changes.append({
+                    "type": "authorization",
+                    "level": "potential",
+                    "description": rule,
+                })
+
+        record = {
+            "id": ApiImpactStore._persist_next_id(),
+            "workspace_id": workspace_id,
+            "project_id": sprint.get("project_id"),
+            "sprint_id": sprint.get("id"),
+            "ticket_id": ticket.get("id"),
+            "spec_id": spec_id,
+            "spec_version": spec.get("version"),
+            "service_name": spec.get("service_name", ""),
+            "impacts": impacts,
+            "schema_changes": analysis.get("db_changes") or [],
+            "validation_changes": analysis.get("validation_rules") or [],
+            "breaking_changes": breaking_changes,
+            "confirmed_count": sum(1 for item in impacts if item.get("confirmation") == "spec_confirmed"),
+            "missing_count": sum(1 for item in impacts if item.get("confirmation") == "not_in_spec"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        return await ApiImpactStore._persist_add(record)
+
+    @classmethod
+    def list_ticket_impacts(cls, ticket_id: int, workspace_id: int) -> list[dict]:
+        return sorted(
+            [
+                item for item in ApiImpactStore.list_by("ticket_id", ticket_id)
+                if item.get("workspace_id") == workspace_id
+            ],
+            key=lambda item: item.get("created_at", ""),
+            reverse=True,
+        )
+
+    @classmethod
     async def delete_spec(cls, spec_id: int, workspace_id: int) -> bool:
         spec = cls.get_spec(spec_id, workspace_id)
         if spec:
+            from .lifecycle import TicketArtifactLinkStore
+
             await ApiSpecStore._persist_delete(spec_id)
-            # Clean related test plans
+            related_plan_ids = set()
             for pid in list(_test_plans.keys()):
                 if _test_plans[pid]["spec_id"] == spec_id:
+                    related_plan_ids.add(pid)
                     await TestPlanStore._persist_delete(pid)
+            related_impact_ids = {
+                impact["id"]
+                for impact in ApiImpactStore.list_by("spec_id", spec_id)
+                if impact.get("workspace_id") == workspace_id
+            }
+            for impact_id in related_impact_ids:
+                await ApiImpactStore._persist_delete(impact_id)
+            for link in list(TicketArtifactLinkStore.list_by("workspace_id", workspace_id)):
+                if (
+                    link.get("artifact_type") == "api_spec"
+                    and link.get("artifact_id") == spec_id
+                ) or (
+                    link.get("artifact_type") == "test_plan"
+                    and link.get("artifact_id") in related_plan_ids
+                ) or (
+                    link.get("artifact_type") == "api_impact"
+                    and link.get("artifact_id") in related_impact_ids
+                ):
+                    await TicketArtifactLinkStore._persist_delete(link["id"])
             return True
         return False
 
@@ -203,6 +473,7 @@ class ApiTestPlannerService:
         workspace_id: int,
         provider=None,  # AIProvider instance, falls back to create_provider()
         focus_tags: Optional[list[str]] = None,
+        ticket_ids: Optional[list[int]] = None,
     ) -> dict:
         """Generate an AI-powered test plan from a parsed OpenAPI spec."""
         spec = cls.get_spec(spec_id, workspace_id)
@@ -253,6 +524,8 @@ class ApiTestPlannerService:
             "id": plan_id,
             "spec_id": spec_id,
             "workspace_id": workspace_id,
+            "project_id": spec.get("project_id"),
+            "ticket_ids": ticket_ids or [],
             "title": f"Test Plan: {spec.get('title', 'Untitled')}",
             "base_url": cls._infer_base_url(spec),
             "endpoints_analyzed": total_endpoints,
