@@ -4,6 +4,7 @@ This module provides CLI-level scanning of local Git repositories.
 Used by `scopepilot codebase scan` command.
 """
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -79,6 +80,7 @@ def scan_local_repository(
     total_lines = 0
     total_bytes = 0
     language_bytes: dict[str, int] = {}
+    code_index: list[dict] = []
 
     # Language mapping by extension
     lang_map = {
@@ -123,7 +125,7 @@ def scan_local_repository(
             if len(files) >= max_files:
                 break
 
-            rel_path = str(rel_root / fname) if str(rel_root) != "." else fname
+            rel_path = (str(rel_root / fname) if str(rel_root) != "." else fname).replace("\\", "/")
             file_path = Path(root_str) / fname
 
             try:
@@ -149,6 +151,17 @@ def scan_local_repository(
                             language_bytes["Dockerfile"] = language_bytes.get("Dockerfile", 0) + fsize
 
                         total_bytes += fsize
+                        if fsize <= 256_000:
+                            try:
+                                text = file_path.read_text(encoding="utf-8", errors="ignore")
+                                line_count = text.count("\n") + (1 if text else 0)
+                                total_lines += line_count
+                                entry = index_source_text(rel_path, text)
+                                if entry["symbols"] or entry["routes"] or entry["imports"]:
+                                    entry["line_count"] = line_count
+                                    code_index.append(entry)
+                            except (OSError, PermissionError):
+                                pass
             except (OSError, PermissionError):
                 continue
 
@@ -168,7 +181,55 @@ def scan_local_repository(
         "total_files": len(files),
         "total_bytes": total_bytes,
         "total_lines": total_lines,
+        "code_index": code_index,
         "scanned_at": __import__("datetime").datetime.utcnow().isoformat(),
+    }
+
+
+def index_source_text(path: str, text: str) -> dict:
+    """Extract lightweight symbols, routes, imports, and searchable terms."""
+    symbol_patterns = (
+        r"^\s*(?:export\s+)?(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)",
+        r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)",
+        r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)",
+        r"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?\(",
+        r"^\s*(?:export\s+)?interface\s+([A-Za-z_$][A-Za-z0-9_$]*)",
+        r"^\s*(?:public|private|protected|internal)?\s*(?:class|interface|record|enum)\s+([A-Za-z_][A-Za-z0-9_]*)",
+    )
+    route_patterns = (
+        r"@\w+\.(?:get|post|put|patch|delete)\(\s*[\"']([^\"']+)",
+        r"\b(?:router|app)\.(?:get|post|put|patch|delete)\(\s*[\"'`]([^\"'`]+)",
+        r"\[(?:HttpGet|HttpPost|HttpPut|HttpPatch|HttpDelete)(?:\(\s*[\"']([^\"']+))?",
+    )
+    import_patterns = (
+        r"^\s*(?:from\s+([A-Za-z0-9_\.]+)\s+import|import\s+([A-Za-z0-9_\.]+))",
+        r"^\s*import\s+.*?\s+from\s+[\"']([^\"']+)",
+        r"^\s*(?:const|let|var)\s+.*?=\s*require\([\"']([^\"']+)",
+        r"^\s*using\s+([A-Za-z0-9_\.]+)",
+    )
+
+    symbols: list[str] = []
+    routes: list[str] = []
+    imports: list[str] = []
+    for pattern in symbol_patterns:
+        symbols.extend(re.findall(pattern, text, flags=re.MULTILINE))
+    for pattern in route_patterns:
+        routes.extend(value for value in re.findall(pattern, text, flags=re.MULTILINE) if value)
+    for pattern in import_patterns:
+        for match in re.findall(pattern, text, flags=re.MULTILINE):
+            if isinstance(match, tuple):
+                imports.extend(value for value in match if value)
+            elif match:
+                imports.append(match)
+
+    words = re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", text)
+    searchable_terms = sorted(set(word.lower() for word in words))[:2000]
+    return {
+        "path": path,
+        "symbols": list(dict.fromkeys(symbols))[:200],
+        "routes": list(dict.fromkeys(routes))[:100],
+        "imports": list(dict.fromkeys(imports))[:200],
+        "searchable_terms": searchable_terms,
     }
 
 

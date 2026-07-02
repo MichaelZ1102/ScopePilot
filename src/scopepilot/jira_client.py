@@ -67,6 +67,14 @@ def _check_response(resp: httpx.Response, path: str) -> dict:
     return resp.json()
 
 
+def _check_write_response(resp: httpx.Response, path: str) -> dict:
+    if resp.status_code in {200, 201}:
+        return resp.json()
+    if resp.status_code == 204:
+        return {"ok": True}
+    return _check_response(resp, path)
+
+
 class JiraClient:
     """Client for Jira REST API (Agile 1.0 + API v3)."""
 
@@ -100,6 +108,28 @@ class JiraClient:
         except httpx.RequestError as e:
             raise JiraError(f"Jira connection error: {e}") from e
         return _check_response(resp, path)
+
+    def _post_api3(self, path: str, payload: dict) -> dict:
+        try:
+            resp = self._client_api3.post(
+                path,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+        except httpx.RequestError as e:
+            raise JiraError(f"Jira connection error: {e}") from e
+        return _check_write_response(resp, path)
+
+    def _put_api3(self, path: str, payload: dict) -> dict:
+        try:
+            resp = self._client_api3.put(
+                path,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+        except httpx.RequestError as e:
+            raise JiraError(f"Jira connection error: {e}") from e
+        return _check_write_response(resp, path)
 
     def find_sprint(self, sprint_name: str) -> Optional[dict]:
         """Find a sprint by name across all boards."""
@@ -155,6 +185,44 @@ class JiraClient:
             },
         )
         return result
+
+    def add_issue_comment(self, issue_key: str, body: str) -> dict:
+        """Add a plain-text comment using Atlassian Document Format."""
+        return self._post_api3(
+            f"issue/{issue_key}/comment",
+            {
+                "body": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [{
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": body}],
+                    }],
+                },
+            },
+        )
+
+    def update_issue_labels(self, issue_key: str, labels: list[str]) -> dict:
+        """Replace Jira issue labels."""
+        return self._put_api3(f"issue/{issue_key}", {"fields": {"labels": labels}})
+
+    def transition_issue(self, issue_key: str, transition_name_or_id: str) -> dict:
+        """Move a Jira issue using a transition ID or case-insensitive name."""
+        transitions = self._get_api3(f"issue/{issue_key}/transitions").get("transitions", [])
+        transition = next(
+            (
+                item for item in transitions
+                if str(item.get("id")) == transition_name_or_id
+                or item.get("name", "").lower() == transition_name_or_id.lower()
+            ),
+            None,
+        )
+        if not transition:
+            raise JiraError(f"Jira transition not found: {transition_name_or_id}")
+        return self._post_api3(
+            f"issue/{issue_key}/transitions",
+            {"transition": {"id": transition["id"]}},
+        )
 
     @staticmethod
     def _adf_to_text(adf: dict) -> str:
@@ -247,6 +315,7 @@ class JiraClient:
             "issue_type": fields.get("issuetype", {}).get("name", ""),
             "labels": fields.get("labels", []),
             "story_points": fields.get("customfield_10016"),
+            "source_updated_at": fields.get("updated"),
         }
 
     @staticmethod

@@ -12,3 +12,4 @@ export async function analyzeTicket(sprint_id: number, ticket_id: number) {
 }
 export async function listTickets(sprint_id: number) { const r = await api.get(`/tickets/${sprint_id}/tickets`); return r.data as TicketDetail[] }
 export async function getTicket(sprint_id: number, ticket_id: number) { const r = await api.get(`/tickets/${sprint_id}/tickets/${ticket_id}`); return r.data as TicketDetail }
+export async function syncSprint(sprint_id: number) { const r = await api.post(`/sprints/${sprint_id}/sync`); return r.data }

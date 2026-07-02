@@ -1,7 +1,7 @@
 """Auth service: JWT tokens, password hashing, login/register logic."""
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Callable, Optional
 from jose import jwt, JWTError
 import bcrypt as _bcrypt
 from fastapi import Depends, HTTPException, status, Request
@@ -69,21 +69,65 @@ def get_current_user(
     """Dependency: extract and validate current user from cookie or Bearer token."""
     token = request.cookies.get(COOKIE_NAME)
     if token:
-        return decode_access_token(token)
+        payload = decode_access_token(token)
+        return _validate_token_user(payload)
     if credentials is not None:
-        return decode_access_token(credentials.credentials)
+        payload = decode_access_token(credentials.credentials)
+        return _validate_token_user(payload)
     raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+def _validate_token_user(payload: dict) -> dict:
+    """Reject tokens for removed users and refresh role/name from persistence."""
+    from ..api.v1.auth import UserStore
+
+    user = UserStore.get(payload.get("user_id"))
+    if not user or user.get("workspace_id") != payload.get("workspace_id"):
+        raise HTTPException(status_code=401, detail="User no longer has workspace access")
+    return {
+        **payload,
+        "role": user.get("role", "viewer"),
+        "name": user.get("name", user.get("email", "")),
+        "email": user.get("email", payload.get("sub", "")),
+    }
+
+
+def get_current_actor(token_data: dict = Depends(get_current_user)) -> dict:
+    """Return token data enriched with the persisted user's current role and name."""
+    from ..api.v1.auth import UserStore
+
+    user = UserStore.get(token_data.get("user_id"))
+    if not user or user.get("workspace_id") != token_data.get("workspace_id"):
+        raise HTTPException(status_code=401, detail="User not found")
+    return {
+        **token_data,
+        "role": user.get("role", "viewer"),
+        "name": user.get("name", user.get("email", "")),
+        "email": user.get("email", token_data.get("sub", "")),
+    }
+
+
+def require_roles(*allowed_roles: str) -> Callable:
+    """Create a FastAPI dependency that restricts an endpoint by workspace role."""
+    allowed = set(allowed_roles)
+
+    def dependency(actor: dict = Depends(get_current_actor)) -> dict:
+        if actor.get("role") not in allowed:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return actor
+
+    return dependency
 
 
 async def get_current_user_from_cookie(request: Request):
     """Dependency: extract and validate current user from HttpOnly cookie (web frontend)."""
     token = request.cookies.get(COOKIE_NAME)
     if token:
-        return decode_access_token(token)
+        return _validate_token_user(decode_access_token(token))
     # Fallback: try Authorization header (for API clients)
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
-        return decode_access_token(auth[7:])
+        return _validate_token_user(decode_access_token(auth[7:]))
     raise HTTPException(status_code=401, detail="Not authenticated")
 
 

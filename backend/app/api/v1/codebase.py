@@ -6,8 +6,11 @@ from ...schemas import (
     CodeSourceCreate, CodeSourceResponse, CodeSourceDetailResponse,
     RepoSnapshotResponse, CodeImpactResponse,
 )
-from ...services import get_current_user
+from ...services import get_current_user, require_roles
 from ...services.codebase import CodebaseService, CodebaseError
+from ...services.jira import JiraService
+from ...services.lifecycle import LifecycleService
+from ..v1.projects import _projects
 
 router = APIRouter()
 
@@ -24,9 +27,13 @@ async def list_sources(token_data: dict = Depends(get_current_user)):
 @router.post("/", response_model=CodeSourceResponse, status_code=201)
 async def create_source(
     data: CodeSourceCreate,
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin", "member")),
 ):
     """Register a new code repository source."""
+    if data.project_id is not None:
+        project = _projects.get(data.project_id)
+        if not project or project.get("workspace_id") != token_data.get("workspace_id"):
+            raise HTTPException(status_code=404, detail="Project not found")
     return await CodebaseService.create_source(
         data.model_dump(), token_data.get("workspace_id"),
     )
@@ -47,7 +54,7 @@ async def get_source(
 @router.delete("/{source_id}", status_code=204)
 async def delete_source(
     source_id: Annotated[int, Path(gt=0)],
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin", "member")),
 ):
     """Delete a code source and its related data."""
     if not await CodebaseService.delete_source(source_id, token_data.get("workspace_id")):
@@ -57,7 +64,7 @@ async def delete_source(
 @router.post("/{source_id}/scan", response_model=RepoSnapshotResponse)
 async def scan_repository(
     source_id: Annotated[int, Path(gt=0)],
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin", "member")),
 ):
     """Trigger a scan of the repository."""
     try:
@@ -91,11 +98,23 @@ async def analyze_code_impact(
     source_id: Annotated[int, Path(gt=0)],
     ticket_id: Annotated[int, Path(gt=0)],
     sprint_id: Annotated[int, Query(gt=0)],
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin", "member")),
     summary: str = "",
     description: str = "",
 ):
     """Analyze code impact for a specific ticket within a source repo."""
+    ticket = JiraService.get_ticket(ticket_id)
+    sprint = JiraService.get_sprint(sprint_id)
+    if not ticket or not sprint or ticket.get("sprint_id") != sprint_id:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    project = _projects.get(sprint.get("project_id"))
+    if not project or project.get("workspace_id") != token_data.get("workspace_id"):
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    source = CodebaseService.get_source(source_id, token_data.get("workspace_id"))
+    if not source:
+        raise HTTPException(status_code=404, detail="Code source not found")
+    if source.get("project_id") is not None and source.get("project_id") != sprint.get("project_id"):
+        raise HTTPException(status_code=400, detail="Code source belongs to another project")
     try:
         snapshot = CodebaseService.get_latest_snapshot(
             source_id, token_data.get("workspace_id"),
@@ -108,6 +127,23 @@ async def analyze_code_impact(
             ticket_summary=summary,
             ticket_description=description,
             snapshot=snapshot,
+        )
+        await LifecycleService.link_artifact(
+            workspace_id=token_data.get("workspace_id"),
+            project_id=sprint["project_id"],
+            sprint_id=sprint_id,
+            ticket_id=ticket_id,
+            artifact_type="code_impact",
+            artifact_id=impact["id"],
+            metadata={
+                "code_source_id": source_id,
+                "commit_sha": (snapshot or {}).get("commit_sha"),
+            },
+        )
+        await LifecycleService.invalidate_review(
+            ticket_id,
+            token_data.get("workspace_id"),
+            "代码影响分析已更新，需要重新审核。",
         )
         return impact
     except CodebaseError as e:

@@ -12,6 +12,7 @@ dependencies = [
     "bcrypt>=4.1,<5",
     "httpx>=0.27,<1",
     "python-dotenv>=1.0,<2",
+    "reportlab>=4.2,<5",
     # "scopepilot-cli @ file:///${PROJECT_ROOT}/..",
 ]
 

@@ -5,9 +5,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path
 
-from ...services import get_current_user
+from ...services import get_current_user, require_roles
 from ...services.jira import JiraService, SprintStore, _sprints
-from ...services.analysis import AnalysisService, AnalysisServiceError
+from ...services.lifecycle import LifecycleService
+from ...services.notifications import NotificationService
+from ...services.analysis import AnalysisJobStore, AnalysisService, AnalysisServiceError
 from ...schemas import SprintDetailResponse
 from ..v1.projects import _projects
 
@@ -30,6 +32,72 @@ def _verify_sprint_access(sprint_id: int, token_data: dict) -> dict:
     return sprint
 
 
+@router.get("/jobs")
+async def list_analysis_jobs(
+    token_data: dict = Depends(get_current_user),
+):
+    """List analysis jobs for the current workspace."""
+    return AnalysisService.list_jobs(token_data.get("workspace_id"))
+
+
+@router.get("/jobs/{job_id}")
+async def get_analysis_job(
+    job_id: Annotated[int, Path(gt=0)],
+    token_data: dict = Depends(get_current_user),
+):
+    job = AnalysisService.get_job(job_id, token_data.get("workspace_id"))
+    if not job:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+    return job
+
+
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_analysis_job(
+    job_id: Annotated[int, Path(gt=0)],
+    token_data: dict = Depends(require_roles("admin", "member")),
+):
+    job = await AnalysisService.request_cancel(job_id, token_data.get("workspace_id"))
+    if not job:
+        raise HTTPException(status_code=409, detail="Analysis job cannot be cancelled")
+    return job
+
+
+@router.post("/jobs/{job_id}/retry", status_code=201)
+async def retry_analysis_job(
+    job_id: Annotated[int, Path(gt=0)],
+    background_tasks: BackgroundTasks,
+    token_data: dict = Depends(require_roles("admin", "member")),
+):
+    previous = AnalysisService.get_job(job_id, token_data.get("workspace_id"))
+    if not previous:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+    if previous.get("status") not in {"failed", "cancelled"}:
+        raise HTTPException(status_code=409, detail="Only failed or cancelled jobs can be retried")
+    sprint_id = previous["sprint_id"]
+    _verify_sprint_access(sprint_id, token_data)
+    job = await AnalysisService.create_job(sprint_id, token_data.get("workspace_id"))
+    await SprintStore.update_fields(
+        sprint_id,
+        {"analysis_status": "running", "latest_analysis_job_id": job["id"]},
+    )
+    background_tasks.add_task(
+        _run_analysis_background,
+        sprint_id,
+        job["id"],
+        token_data.get("workspace_id"),
+    )
+    await LifecycleService.audit(
+        workspace_id=token_data.get("workspace_id"),
+        actor_id=token_data.get("user_id"),
+        actor_name=token_data.get("name", token_data.get("sub", "")),
+        action="analysis.sprint.start",
+        resource_type="sprint",
+        resource_id=sprint_id,
+        details={"job_id": job["id"]},
+    )
+    return job
+
+
 @router.post(
     "/sprints/{sprint_id}/analyze",
     response_model=SprintDetailResponse,
@@ -39,7 +107,7 @@ def _verify_sprint_access(sprint_id: int, token_data: dict) -> dict:
 async def trigger_analysis(
     sprint_id: Annotated[int, Path(gt=0)],
     background_tasks: BackgroundTasks,
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin", "member")),
 ):
     """触发 AI 分析管线（后台异步执行）。"""
     _verify_sprint_access(sprint_id, token_data)
@@ -56,20 +124,48 @@ async def trigger_analysis(
     )
 
     # 后台异步执行分析
-    background_tasks.add_task(_run_analysis_background, sprint_id, job["id"])
+    background_tasks.add_task(
+        _run_analysis_background,
+        sprint_id,
+        job["id"],
+        token_data.get("workspace_id"),
+    )
 
     return SprintDetailResponse(**_sprints[sprint_id])
 
 
-def _run_analysis_background(sprint_id: int, job_id: int):
+def _run_analysis_background(sprint_id: int, job_id: int, workspace_id: int):
     """后台运行 AI 分析（在 executor 线程中执行）。"""
     try:
         asyncio.run(AnalysisService.update_job(job_id, "running"))
-        asyncio.run(AnalysisService.analyze_sprint(sprint_id))
+        job = AnalysisJobStore.get(job_id)
+        if job and job.get("cancel_requested"):
+            asyncio.run(AnalysisService.update_job(job_id, "cancelled"))
+            return
+        asyncio.run(AnalysisService.analyze_sprint(sprint_id, workspace_id, job_id))
         asyncio.run(AnalysisService.update_job(job_id, "done"))
+        asyncio.run(NotificationService.emit(
+            workspace_id=workspace_id,
+            event_type="analysis.completed",
+            title="Sprint 分析完成",
+            message=f"Sprint #{sprint_id} 的分析任务已完成。",
+            resource_type="sprint",
+            resource_id=sprint_id,
+            details={"job_id": job_id},
+        ))
         logger.info("Sprint %d AI 分析完成", sprint_id)
     except AnalysisServiceError as exc:
-        asyncio.run(AnalysisService.update_job(job_id, "failed", str(exc)))
+        status = "cancelled" if str(exc) == "Analysis cancelled" else "failed"
+        asyncio.run(AnalysisService.update_job(job_id, status, str(exc)))
+        asyncio.run(NotificationService.emit(
+            workspace_id=workspace_id,
+            event_type=f"analysis.{status}",
+            title="Sprint 分析已取消" if status == "cancelled" else "Sprint 分析失败",
+            message=str(exc),
+            resource_type="sprint",
+            resource_id=sprint_id,
+            details={"job_id": job_id},
+        ))
         pass  # analyze_sprint already sets status=done/failed and persists
 
 
@@ -107,7 +203,7 @@ async def get_analysis(
 async def analyze_ticket(
     sprint_id: Annotated[int, Path(gt=0)],
     ticket_id: Annotated[int, Path(gt=0)],
-    token_data: dict = Depends(get_current_user),
+    token_data: dict = Depends(require_roles("admin", "member")),
 ):
     """Run AI analysis for one Ticket and replace its previous result."""
     sprint = _verify_sprint_access(sprint_id, token_data)
@@ -116,7 +212,28 @@ async def analyze_ticket(
         raise HTTPException(status_code=404, detail="Ticket 不存在")
 
     try:
-        analysis_result = await AnalysisService.analyze_ticket(sprint_id, ticket_id)
+        analysis_result = await AnalysisService.analyze_ticket(
+            sprint_id,
+            ticket_id,
+            token_data.get("workspace_id"),
+        )
+        await LifecycleService.audit(
+            workspace_id=token_data.get("workspace_id"),
+            actor_id=token_data.get("user_id"),
+            actor_name=token_data.get("name", token_data.get("sub", "")),
+            action="analysis.ticket.complete",
+            resource_type="ticket",
+            resource_id=ticket_id,
+            details={"sprint_id": sprint_id},
+        )
+        await NotificationService.emit(
+            workspace_id=token_data.get("workspace_id"),
+            event_type="analysis.ticket.completed",
+            title=f"{ticket['key']} 分析完成",
+            message="Ticket 分析结果已更新，等待审核。",
+            resource_type="ticket",
+            resource_id=ticket_id,
+        )
         return {
             "ticket_id": ticket_id,
             "ticket_key": ticket["key"],

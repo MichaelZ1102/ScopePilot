@@ -13,3 +13,7 @@ export async function getMe() {
   const res = await api.get('/auth/me')
   return res.data as User
 }
+export async function acceptInvite(email: string, invite_token: string, name: string, password: string) {
+  const res = await api.post('/auth/accept-invite', { email, invite_token, name, password })
+  return res.data as { access_token: string; token_type: string; user: User }
+}

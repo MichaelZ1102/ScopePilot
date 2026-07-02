@@ -207,9 +207,29 @@ class TeamService:
         if existing:
             raise TeamError(f"Member {email} already exists in this workspace.")
 
+        existing_member = next(
+            (
+                item for item in TeamMemberStore.list_by("workspace_id", workspace_id)
+                if item.get("email", "").lower() == email.lower()
+            ),
+            None,
+        )
+        if existing_member:
+            raise TeamError("A member with this email already exists.")
+        from ..api.v1.auth import UserStore
+        user = UserStore.find_by("email", email.lower())
+        if user and user.get("workspace_id") != workspace_id:
+            raise TeamError("This email belongs to another workspace.")
+        if user:
+            await UserStore.update_fields(user["id"], {"role": role, "name": name})
+        now = datetime.now(timezone.utc).isoformat()
         member = {"id": TeamMemberStore._persist_next_id(), "workspace_id": workspace_id,
-                  "email": email, "name": name, "role": role, "status": "active",
-                  "invited_by": invited_by or "", "joined_at": datetime.now(timezone.utc).isoformat()}
+                  "email": email.lower(), "name": name, "role": role,
+                  "status": "active" if user else "invited",
+                  "invite_token": "" if user else secrets.token_urlsafe(24),
+                  "invited_by": invited_by or "",
+                  "invited_at": now,
+                  "joined_at": now if user else None}
         await TeamMemberStore._persist_add(member)
         await cls.increment_usage(workspace_id, "members_active")
         return member
@@ -222,6 +242,10 @@ class TeamService:
                 raise TeamError(f"Invalid role: {role}")
             member["role"] = role
             await TeamMemberStore.update_fields(member_id, {"role": role})
+            from ..api.v1.auth import UserStore
+            user = UserStore.find_by("email", member.get("email", "").lower())
+            if user and user.get("workspace_id") == workspace_id:
+                await UserStore.update_fields(user["id"], {"role": role})
             return member
         return None
 
@@ -229,6 +253,10 @@ class TeamService:
     async def remove_member(cls, workspace_id: int, member_id: int) -> bool:
         member = TeamMemberStore.get(member_id)
         if member and member["workspace_id"] == workspace_id:
+            from ..api.v1.auth import UserStore
+            user = UserStore.find_by("email", member.get("email", "").lower())
+            if user and user.get("workspace_id") == workspace_id:
+                await UserStore._persist_delete(user["id"])
             await TeamMemberStore._persist_delete(member_id)
             await cls.increment_usage(workspace_id, "members_active", -1)
             return True
@@ -238,7 +266,8 @@ class TeamService:
 
     @classmethod
     async def share_report(cls, workspace_id: int, sprint_id: int, title: str,
-                     shared_by: str = "", expires_in_days: int = 30, password: str = "") -> dict:
+                     shared_by: str = "", expires_in_days: int = 30, password: str = "",
+                     snapshot_id: Optional[int] = None) -> dict:
         entry = cls._get_billing_entry(workspace_id) or {}
         tier_name = entry.get("tier", "free")
         tier_info = TIERS.get(tier_name, TIERS["free"])
@@ -249,6 +278,7 @@ class TeamService:
         now = datetime.now(timezone.utc)
         share = {"id": SharedReportStore._persist_next_id(), "workspace_id": workspace_id,
                  "sprint_id": sprint_id, "title": title, "shared_by": shared_by,
+                 "snapshot_id": snapshot_id,
                  "share_token": share_token, "view_count": 0,
                  "is_password_protected": bool(password),
                  "password_hash": cls._hash_password(password) if password else "",

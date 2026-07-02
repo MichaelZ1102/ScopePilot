@@ -113,6 +113,10 @@ class SprintDetailResponse(SprintResponse):
         default=None,
         description="AI 分析结果，包含 sprint_analysis 和 ticket_analyses",
     )
+    latest_analysis_run_id: Optional[int] = None
+    analysis_stale_at: Optional[str] = None
+    last_synced_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 # === Ticket ===
@@ -138,14 +142,21 @@ class TicketDetailResponse(TicketResponse):
     comments: Optional[list[dict]] = None
     figma_links: Optional[list[str]] = None
     analysis_data: Optional[dict] = None
+    latest_analysis_run_id: Optional[int] = None
+    analysis_status: str = "pending"
+    analysis_stale_at: Optional[str] = None
+    review_data: Optional[dict] = None
     report_included: bool = True
     created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    source_updated_at: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 # === Code Source ===
 class CodeSourceCreate(BaseModel):
+    project_id: Optional[int] = Field(default=None, gt=0)
     name: str = Field(min_length=1, max_length=120)
     provider: Literal["github", "gitlab", "bitbucket", "local"] = "github"
     repo_url: str = Field(min_length=1, max_length=1000)
@@ -155,6 +166,7 @@ class CodeSourceCreate(BaseModel):
 
 class CodeSourceResponse(BaseModel):
     id: int
+    project_id: Optional[int] = None
     name: str
     provider: str
     repo_url: str
@@ -180,6 +192,7 @@ class RepoSnapshotResponse(BaseModel):
     commit_sha: Optional[str] = None
     file_tree: Optional[dict] = None
     language_breakdown: Optional[dict] = None
+    code_index: Optional[list[dict]] = None
     total_files: int
     total_lines: int
     scanned_at: datetime
@@ -195,6 +208,8 @@ class CodeImpactResponse(BaseModel):
     sprint_id: int
     affected_files: Optional[list[dict]] = None
     summary: Optional[str] = None
+    source_commit_sha: Optional[str] = None
+    analysis_method: Optional[str] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

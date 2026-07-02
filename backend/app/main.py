@@ -72,7 +72,7 @@ def _allowed_request_origin(request: Request) -> bool:
         allowed_origins.add(same_origin)
     return candidate in allowed_origins
 
-from .api.v1 import auth, projects, sprints, reports, tickets, analysis, codebase, api_tests, figma, team
+from .api.v1 import auth, projects, sprints, reports, tickets, analysis, codebase, api_tests, figma, team, notifications
 from .startup import load_persisted_data
 
 
@@ -131,6 +131,7 @@ app.include_router(codebase.router, prefix="/api/v1/code-sources", tags=["codeba
 app.include_router(api_tests.router, prefix="/api/v1/api-tests", tags=["api-tests"])
 app.include_router(figma.router, prefix="/api/v1/figma", tags=["figma"])
 app.include_router(team.router, prefix="/api/v1/team", tags=["team"])
+app.include_router(notifications.router, prefix="/api/v1/notifications", tags=["notifications"])
 
 # Serve frontend static files in production
 frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"

@@ -12,6 +12,7 @@ from ..adapters import create_analysis_pipeline
 from ..database import SqliteStore
 
 from .jira import JiraService, SprintStore, TicketStore, _sprints
+from .lifecycle import LifecycleService
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class AnalysisService:
     @staticmethod
     async def create_job(sprint_id: int, workspace_id: int) -> dict:
         now = datetime.now(timezone.utc).isoformat()
+        sprint = JiraService.get_sprint(sprint_id)
         job = {
             "id": AnalysisJobStore._persist_next_id(),
             "sprint_id": sprint_id,
@@ -41,6 +43,9 @@ class AnalysisService:
             "created_at": now,
             "started_at": None,
             "finished_at": None,
+            "progress_current": 0,
+            "progress_total": len((sprint or {}).get("tickets", [])),
+            "cancel_requested": False,
         }
         return await AnalysisJobStore._persist_add(job)
 
@@ -50,14 +55,43 @@ class AnalysisService:
         now = datetime.now(timezone.utc).isoformat()
         if status == "running":
             updates["started_at"] = now
-        if status in {"done", "failed"}:
+        if status in {"done", "failed", "cancelled"}:
             updates["finished_at"] = now
         if error_message:
             updates["error_message"] = error_message[:2000]
         await AnalysisJobStore.update_fields(job_id, updates)
 
     @staticmethod
-    async def analyze_sprint(sprint_id: int) -> dict:
+    def list_jobs(workspace_id: int) -> list[dict]:
+        return sorted(
+            AnalysisJobStore.list_by("workspace_id", workspace_id),
+            key=lambda item: item.get("created_at", ""),
+            reverse=True,
+        )
+
+    @staticmethod
+    def get_job(job_id: int, workspace_id: int) -> Optional[dict]:
+        job = AnalysisJobStore.get(job_id)
+        if job and job.get("workspace_id") == workspace_id:
+            return job
+        return None
+
+    @staticmethod
+    async def request_cancel(job_id: int, workspace_id: int) -> Optional[dict]:
+        job = AnalysisService.get_job(job_id, workspace_id)
+        if not job or job.get("status") in {"done", "failed", "cancelled"}:
+            return None
+        return await AnalysisJobStore.update_fields(
+            job_id,
+            {"status": "cancel_requested", "cancel_requested": True},
+        )
+
+    @staticmethod
+    async def analyze_sprint(
+        sprint_id: int,
+        workspace_id: Optional[int] = None,
+        job_id: Optional[int] = None,
+    ) -> dict:
         """对指定 sprint 运行 AI 分析管线。
 
         步骤:
@@ -85,6 +119,13 @@ class AnalysisService:
         tickets = sprint.get("tickets", [])
         if not tickets:
             raise AnalysisServiceError(f"Sprint {sprint_id} 没有需要分析的 ticket")
+        project_id = sprint["project_id"]
+        if workspace_id is None:
+            from ..api.v1.projects import ProjectStore
+            project = ProjectStore.get(project_id)
+            workspace_id = project.get("workspace_id") if project else None
+        if workspace_id is None:
+            raise AnalysisServiceError("Sprint workspace could not be resolved")
 
         # 标记为"运行中"
         _sprints[sprint_id]["analysis_status"] = "running"
@@ -98,11 +139,56 @@ class AnalysisService:
                 "正在分析 Sprint「%s」的 %d 个 ticket …",
                 sprint["name"], len(tickets),
             )
-            ticket_analyses = pipeline.analyze_tickets_batch(tickets)
+            ticket_analyses = []
+            for start in range(0, len(tickets), 5):
+                if job_id is not None:
+                    job = AnalysisJobStore.get(job_id)
+                    if job and job.get("cancel_requested"):
+                        raise AnalysisServiceError("Analysis cancelled")
+                batch = tickets[start:start + 5]
+                batch_results = await asyncio.to_thread(
+                    pipeline.analyze_tickets_batch,
+                    batch,
+                    5,
+                )
+                ticket_analyses.extend(batch_results)
+                if job_id is not None:
+                    await AnalysisJobStore.update_fields(
+                        job_id,
+                        {"progress_current": min(start + len(batch), len(tickets))},
+                    )
             for ticket, ticket_analysis in zip(tickets, ticket_analyses):
+                result = ticket_analysis.to_dict()
+                run = await LifecycleService.create_analysis_run(
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                    sprint_id=sprint_id,
+                    ticket_id=ticket["id"],
+                    analysis_type="ticket",
+                    result=result,
+                    source_versions={
+                        "jira_updated_at": (
+                            ticket.get("source_updated_at")
+                            or ticket.get("updated_at")
+                            or ticket.get("created_at")
+                        ),
+                    },
+                    model=type(pipeline.provider).__name__,
+                )
                 await TicketStore.update_fields(
                     ticket["id"],
-                    {"analysis_data": ticket_analysis.to_dict()},
+                    {
+                        "analysis_data": result,
+                        "latest_analysis_run_id": run["id"],
+                        "analysis_status": "completed",
+                        "analysis_stale_at": None,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+                await LifecycleService.invalidate_review(
+                    ticket["id"],
+                    workspace_id,
+                    "分析结果已更新，需要重新审核。",
                 )
 
             # 5. 生成 sprint 摘要
@@ -118,12 +204,37 @@ class AnalysisService:
                 "sprint_analysis": sprint_analysis.to_dict(),
                 "ticket_analyses": [ta.to_dict() for ta in ticket_analyses],
             }
+            sprint_run = await LifecycleService.create_analysis_run(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                sprint_id=sprint_id,
+                ticket_id=None,
+                analysis_type="sprint",
+                result=analysis_data,
+                source_versions={
+                    "ticket_analysis_run_ids": [
+                        ticket.get("latest_analysis_run_id")
+                        for ticket in JiraService.list_tickets(sprint_id)
+                        if ticket.get("latest_analysis_run_id")
+                    ],
+                },
+                model=type(pipeline.provider).__name__,
+            )
 
             # 6. 持久化到 sprint 记录
             from ..services.jira import SprintStore
             _sprints[sprint_id]["analysis_data"] = analysis_data
             _sprints[sprint_id]["analysis_status"] = "done"
-            await SprintStore._persist_update(sprint_id, {"analysis_data": analysis_data, "analysis_status": "done"})
+            await SprintStore._persist_update(
+                sprint_id,
+                {
+                    "analysis_data": analysis_data,
+                    "analysis_status": "done",
+                    "latest_analysis_run_id": sprint_run["id"],
+                    "analysis_stale_at": None,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
 
             return {
                 **sprint,
@@ -139,17 +250,44 @@ class AnalysisService:
             raise AnalysisServiceError(str(exc)) from exc
 
     @staticmethod
-    async def analyze_ticket(sprint_id: int, ticket_id: int) -> dict:
+    async def analyze_ticket(
+        sprint_id: int,
+        ticket_id: int,
+        workspace_id: Optional[int] = None,
+    ) -> dict:
         """Analyze one ticket and replace only that ticket's stored result."""
         sprint = JiraService.get_sprint(sprint_id)
         ticket = JiraService.get_ticket(ticket_id)
         if sprint is None or ticket is None or ticket.get("sprint_id") != sprint_id:
             raise AnalysisServiceError("Ticket does not belong to this Sprint")
+        project_id = sprint["project_id"]
+        if workspace_id is None:
+            from ..api.v1.projects import ProjectStore
+            project = ProjectStore.get(project_id)
+            workspace_id = project.get("workspace_id") if project else None
+        if workspace_id is None:
+            raise AnalysisServiceError("Ticket workspace could not be resolved")
 
         try:
             pipeline = create_analysis_pipeline()
             ticket_analysis = await asyncio.to_thread(pipeline.analyze_ticket, ticket)
             result = ticket_analysis.to_dict()
+            run = await LifecycleService.create_analysis_run(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                sprint_id=sprint_id,
+                ticket_id=ticket_id,
+                analysis_type="ticket",
+                result=result,
+                source_versions={
+                    "jira_updated_at": (
+                        ticket.get("source_updated_at")
+                        or ticket.get("updated_at")
+                        or ticket.get("created_at")
+                    ),
+                },
+                model=type(pipeline.provider).__name__,
+            )
 
             analysis_data = sprint.get("analysis_data") or {
                 "sprint_analysis": {
@@ -177,7 +315,21 @@ class AnalysisService:
                 if len(ticket_analyses) >= sprint["total_tickets"]
                 else "partial"
             )
-            await TicketStore.update_fields(ticket_id, {"analysis_data": result})
+            await TicketStore.update_fields(
+                ticket_id,
+                {
+                    "analysis_data": result,
+                    "latest_analysis_run_id": run["id"],
+                    "analysis_status": "completed",
+                    "analysis_stale_at": None,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            await LifecycleService.invalidate_review(
+                ticket_id,
+                workspace_id,
+                "分析结果已更新，需要重新审核。",
+            )
             await SprintStore.update_fields(
                 sprint_id,
                 {
@@ -187,6 +339,10 @@ class AnalysisService:
             )
             return result
         except AnalysisServiceError:
+            raise
+        except AnalysisServiceError:
+            _sprints[sprint_id]["analysis_status"] = "pending"
+            await SprintStore._persist_update(sprint_id, {"analysis_status": "pending"})
             raise
         except Exception as exc:
             logger.exception("Ticket %d AI analysis failed", ticket_id)

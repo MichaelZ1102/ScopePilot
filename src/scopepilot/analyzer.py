@@ -40,7 +40,11 @@ Required JSON structure:
   "implementation_plan": ["step 1", "step 2"],
   "api_tests": [
     {"name": "...", "method": "GET", "path": "/api/...", "expected_status": 200, "assertions": ["..."]}
-  ]
+  ],
+  "evidence": [
+    {"claim": "...", "type": "fact/inference/question", "source": "description/acceptance_criteria/comment", "locator": "...", "confidence": "low/medium/high"}
+  ],
+  "assumptions": ["..."]
 }"""
 
 SYSTEM_PROMPT_TICKET_BATCH = """你是资深后端 Tech Lead。请分析下面的多个 Jira tickets，**对每个 ticket 分别输出结构化 JSON，放在一个 JSON 数组中**。
@@ -57,7 +61,9 @@ SYSTEM_PROMPT_TICKET_BATCH = """你是资深后端 Tech Lead。请分析下面�
 - 不要编造 ticket 中不存在的业务规则。
 - 如果信息不足，放入 open_questions。
 - **输出必须是合法 JSON 数组**，元素对应各个 ticket。
-- 保持 JSON 数组顺序与输入一致。"""
+- 保持 JSON 数组顺序与输入一致。
+- 每个结果必须使用单 Ticket 分析相同的完整字段结构，包括 business_goal、acceptance_criteria_summary、backend_features、api_candidates、db_changes、permission_rules、state_transitions、validation_rules、external_dependencies、open_questions、score、code_impact、implementation_plan、api_tests、evidence、assumptions。
+- evidence 必须区分 fact、inference 和 question，并指出 description、acceptance_criteria 或 comment 来源。"""
 
 SYSTEM_PROMPT_SPRINT = """You are a senior backend Tech Lead. Review the sprint summary table and produce a concise analysis.
 
@@ -92,6 +98,8 @@ class TicketAnalysis:
     implementation_plan: list = None
     api_tests: list = None
     comments: list = None
+    evidence: list = None
+    assumptions: list = None
 
     def to_dict(self) -> dict:
         return {
@@ -112,6 +120,8 @@ class TicketAnalysis:
             "implementation_plan": self.implementation_plan or [],
             "api_tests": self.api_tests or [],
             "comments": self.comments or [],
+            "evidence": self.evidence or [],
+            "assumptions": self.assumptions or [],
         }
 
 
@@ -158,6 +168,8 @@ def _parse_ticket_result(ticket_key: str, summary: str, result: dict, comments: 
         implementation_plan=result.get("implementation_plan", []),
         api_tests=result.get("api_tests", []),
         comments=comments or [],
+        evidence=result.get("evidence", []),
+        assumptions=result.get("assumptions", []),
     )
 
 

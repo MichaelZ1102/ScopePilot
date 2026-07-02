@@ -13,6 +13,7 @@ import {
 
 import { createProject, deleteProject, importSprint, listProjects, type Project } from '../lib/api'
 import { getApiErrorMessage } from '../lib/client'
+import { useAuth } from '../lib/AuthContext'
 
 const emptyForm = {
   name: '',
@@ -23,6 +24,7 @@ const emptyForm = {
 }
 
 export default function Projects() {
+  const { user } = useAuth()
   const navigate = useNavigate()
   const { t } = useTranslation()
   const [projects, setProjects] = useState<Project[]>([])
@@ -94,6 +96,8 @@ export default function Projects() {
       </div>
     )
   }
+  const isAdmin = user?.role === 'admin'
+  const canImport = isAdmin || user?.role === 'member'
 
   return (
     <div className="workspace-page">
@@ -104,10 +108,10 @@ export default function Projects() {
           <p>连接 Jira 项目并导入 Sprint，建立 Ticket 分析的数据入口。</p>
         </div>
         <div className="workspace-header-actions">
-          <button className="button button-primary" type="button" onClick={() => setShowCreate(true)}>
+          {isAdmin && <button className="button button-primary" type="button" onClick={() => setShowCreate(true)}>
             <Plus size={17} />
             新建项目
-          </button>
+          </button>}
         </div>
       </header>
 
@@ -116,10 +120,10 @@ export default function Projects() {
           <span className="empty-state-icon"><FolderKanban size={23} /></span>
           <h2>连接第一个 Jira 项目</h2>
           <p>保存 Jira 地址、项目 Key 和访问凭据后，即可按 Sprint 同步 Ticket 并开始分析。</p>
-          <button className="button button-primary" type="button" onClick={() => setShowCreate(true)}>
+          {isAdmin && <button className="button button-primary" type="button" onClick={() => setShowCreate(true)}>
             <Plus size={16} />
             新建项目
-          </button>
+          </button>}
         </section>
       ) : (
         <section className="resource-grid">
@@ -147,21 +151,21 @@ export default function Projects() {
               </div>
 
               <div className="row-actions">
-                <button className="button button-primary button-small" type="button" onClick={() => { setImportProject(project); setSprintName('') }}>
+                {canImport && <button className="button button-primary button-small" type="button" onClick={() => { setImportProject(project); setSprintName('') }}>
                   <Import size={14} />
                   {t('projects.import_btn')}
-                </button>
-                <button className="button button-danger button-small" type="button" onClick={() => handleDelete(project.id)}>
+                </button>}
+                {isAdmin && <button className="button button-danger button-small" type="button" onClick={() => handleDelete(project.id)}>
                   <Trash2 size={14} />
                   {t('projects.delete_btn')}
-                </button>
+                </button>}
               </div>
             </article>
           ))}
         </section>
       )}
 
-      {showCreate && (
+      {isAdmin && showCreate && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowCreate(false)}>
           <div className="workspace-modal" role="dialog" aria-modal="true" aria-labelledby="create-project-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-header">

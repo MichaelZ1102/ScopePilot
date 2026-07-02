@@ -1,5 +1,5 @@
 """Authentication & workspace management routes."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from time import time
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -71,6 +71,18 @@ class RegisterResponse(BaseModel):
     workspace: dict
 
 
+class AcceptInviteRequest(BaseModel):
+    email: str = Field(pattern=EMAIL_PATTERN, max_length=254)
+    invite_token: str = Field(min_length=1, max_length=500)
+    name: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=8, max_length=256)
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_invite_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
 # --- Persisted stores ---
 class UserStore(SqliteStore):
     _entity_name = "auth_users"
@@ -132,8 +144,49 @@ async def register(req: RegisterRequest, response: Response):
         "workspace_id": ws["id"],
     }
     await UserStore._persist_add(user)
+    from ...services.team import TeamMemberStore, UsageRecordStore
+    now = datetime.now(timezone.utc).isoformat()
+    await TeamMemberStore._persist_add({
+        "id": TeamMemberStore._persist_next_id(),
+        "workspace_id": ws["id"],
+        "email": req.email,
+        "name": req.name,
+        "role": "admin",
+        "status": "active",
+        "invite_token": "",
+        "invited_by": "",
+        "invited_at": now,
+        "joined_at": now,
+    })
+    await UsageRecordStore._persist_add({
+        "id": ws["id"],
+        "workspace_id": ws["id"],
+        "period_start": datetime.now(timezone.utc).replace(
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        ).isoformat(),
+        "period_end": (
+            datetime.now(timezone.utc).replace(day=1) + timedelta(days=32)
+        ).replace(day=1).isoformat(),
+        "analyses_run": 0,
+        "repo_scans": 0,
+        "api_specs_imported": 0,
+        "figma_analyses": 0,
+        "members_active": 1,
+        "projects_count": 0,
+        "sprints_imported": 0,
+    })
 
-    token = create_access_token({"sub": req.email, "user_id": user_id, "workspace_id": ws["id"]})
+    token = create_access_token({
+        "sub": req.email,
+        "user_id": user_id,
+        "workspace_id": ws["id"],
+        "role": "admin",
+        "name": req.name,
+    })
     set_token_cookie(response, token)  # Set HttpOnly cookie via response parameter
     return RegisterResponse(
         access_token=token,
@@ -159,12 +212,74 @@ async def login(req: LoginRequest, request: Request, response: Response):
         "sub": user["email"],
         "user_id": user["id"],
         "workspace_id": user["workspace_id"],
+        "role": user["role"],
+        "name": user["name"],
     })
     set_token_cookie(response, token)  # Set HttpOnly cookie via response parameter
     return LoginResponse(
         access_token=token,
         user={"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]},
     )
+
+
+@router.post("/accept-invite")
+async def accept_invite(
+    req: AcceptInviteRequest,
+    response: Response,
+):
+    """Accept a workspace invitation and create a login account."""
+    from ...services.team import TeamMemberStore
+    member = next(
+        (
+            item for item in TeamMemberStore.list_all()
+            if item.get("email", "").lower() == req.email
+            and item.get("invite_token") == req.invite_token
+            and item.get("status") == "invited"
+        ),
+        None,
+    )
+    if not member:
+        raise HTTPException(status_code=404, detail="Invitation not found or already used")
+    if _find_user_by_email(req.email):
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user_id = UserStore._persist_next_id()
+    user = {
+        "id": user_id,
+        "email": req.email,
+        "name": req.name,
+        "hashed_password": hash_password(req.password),
+        "role": member["role"],
+        "workspace_id": member["workspace_id"],
+    }
+    await UserStore._persist_add(user)
+    _users_by_email[req.email] = user
+    await TeamMemberStore.update_fields(
+        member["id"],
+        {
+            "name": req.name,
+            "status": "active",
+            "invite_token": "",
+            "joined_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    token = create_access_token({
+        "sub": req.email,
+        "user_id": user_id,
+        "workspace_id": member["workspace_id"],
+        "role": member["role"],
+        "name": req.name,
+    })
+    set_token_cookie(response, token)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user_id,
+            "email": req.email,
+            "name": req.name,
+            "role": member["role"],
+        },
+    }
 
 
 @router.post("/logout")

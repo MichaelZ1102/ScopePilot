@@ -4,6 +4,8 @@ import {
   Copy,
   CreditCard,
   Languages,
+  ScrollText,
+  Webhook,
   Link2,
   Plus,
   Settings2,
@@ -17,30 +19,41 @@ import {
   getBilling,
   getUsage,
   listMembers,
+  listAuditLogs,
+  createWebhook,
+  deleteWebhook,
+  listWebhooks,
   listSharedReports,
   listTiers,
   removeMember,
   revokeShare,
   shareReport,
   upgradeTier,
+  updateMemberRole,
   type BillingTier,
+  type AuditLog,
   type SharedReport,
   type TeamMember,
   type UsageData,
+  type WebhookSubscription,
 } from '../lib/api'
 import { getApiErrorMessage } from '../lib/client'
+import { useAuth } from '../lib/AuthContext'
 
-type SettingsTab = 'general' | 'billing' | 'team' | 'sharing'
+type SettingsTab = 'general' | 'billing' | 'team' | 'sharing' | 'audit' | 'webhooks'
 
 const tabItems = [
   { id: 'general' as const, label: '通用', icon: Settings2 },
   { id: 'billing' as const, label: '计费与用量', icon: CreditCard },
   { id: 'team' as const, label: '团队', icon: Users },
   { id: 'sharing' as const, label: '报告共享', icon: Link2 },
+  { id: 'audit' as const, label: '审计日志', icon: ScrollText },
+  { id: 'webhooks' as const, label: 'Webhook', icon: Webhook },
 ]
 
 export default function Settings() {
   const { t, i18n } = useTranslation()
+  const { user } = useAuth()
   const [tab, setTab] = useState<SettingsTab>('general')
   const [billing, setBilling] = useState<{ tier?: string } | null>(null)
   const [tiers, setTiers] = useState<BillingTier[]>([])
@@ -49,6 +62,9 @@ export default function Settings() {
   const [showInvite, setShowInvite] = useState(false)
   const [inviteForm, setInviteForm] = useState({ email: '', name: '', role: 'member' })
   const [sharedReports, setSharedReports] = useState<SharedReport[]>([])
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([])
+  const [webhooks, setWebhooks] = useState<WebhookSubscription[]>([])
+  const [webhookForm, setWebhookForm] = useState({ name: '', provider: 'generic', url: '', events: '*', secret: '' })
   const [showShare, setShowShare] = useState(false)
   const [shareForm, setShareForm] = useState({ sprint_id: '', title: '', password: '' })
 
@@ -64,6 +80,10 @@ export default function Settings() {
         setMembers(await listMembers())
       } else if (tab === 'sharing') {
         setSharedReports(await listSharedReports())
+      } else if (tab === 'audit') {
+        setAuditLogs(await listAuditLogs())
+      } else if (tab === 'webhooks') {
+        setWebhooks(await listWebhooks())
       }
     } catch {
       // Keep the current tab usable when an optional settings endpoint is unavailable.
@@ -82,7 +102,12 @@ export default function Settings() {
 
   async function handleInvite() {
     try {
-      await addMember(inviteForm.email, inviteForm.name, inviteForm.role)
+      const member = await addMember(inviteForm.email, inviteForm.name, inviteForm.role)
+      if (member.invite_token) {
+        const inviteUrl = `${window.location.origin}/login?email=${encodeURIComponent(member.email)}&token=${encodeURIComponent(member.invite_token)}`
+        await navigator.clipboard.writeText(inviteUrl)
+        alert('邀请链接已复制，请发送给团队成员。')
+      }
       setShowInvite(false)
       setInviteForm({ email: '', name: '', role: 'member' })
       await loadData()
@@ -98,6 +123,15 @@ export default function Settings() {
       await loadData()
     } catch {
       alert('操作失败')
+    }
+  }
+
+  async function handleMemberRole(id: number, role: string) {
+    try {
+      await updateMemberRole(id, role)
+      await loadData()
+    } catch (error: unknown) {
+      alert(getApiErrorMessage(error, '角色更新失败'))
     }
   }
 
@@ -122,6 +156,27 @@ export default function Settings() {
     }
   }
 
+  async function handleCreateWebhook() {
+    try {
+      await createWebhook({
+        name: webhookForm.name,
+        provider: webhookForm.provider,
+        url: webhookForm.url,
+        events: webhookForm.events.split(',').map((item) => item.trim()).filter(Boolean),
+        secret: webhookForm.secret,
+      })
+      setWebhookForm({ name: '', provider: 'generic', url: '', events: '*', secret: '' })
+      await loadData()
+    } catch (error: unknown) {
+      alert(getApiErrorMessage(error, 'Webhook 创建失败'))
+    }
+  }
+
+  async function handleDeleteWebhook(id: number) {
+    await deleteWebhook(id)
+    await loadData()
+  }
+
   function handleLanguageChange(event: React.ChangeEvent<HTMLSelectElement>) {
     i18n.changeLanguage(event.target.value)
     localStorage.setItem('locale', event.target.value)
@@ -139,7 +194,7 @@ export default function Settings() {
 
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
-          {tabItems.map(({ id, label, icon: Icon }) => (
+          {tabItems.filter((item) => !['audit', 'webhooks'].includes(item.id) || user?.role === 'admin').map(({ id, label, icon: Icon }) => (
             <button className={tab === id ? 'is-active' : ''} type="button" key={id} onClick={() => setTab(id)}>
               <Icon size={16} />
               {label}
@@ -214,7 +269,7 @@ export default function Settings() {
                           <li>支持：{tier.support}</li>
                         </ul>
                         {!isActive && tier.id !== 'free' && (
-                          <button className="button button-primary" type="button" onClick={() => handleUpgrade(tier.id)}>
+                          <button className="button button-primary" type="button" onClick={() => handleUpgrade(tier.id)} disabled={user?.role !== 'admin'}>
                             升级到 {tier.name}
                           </button>
                         )}
@@ -233,9 +288,9 @@ export default function Settings() {
                   <h2>团队成员</h2>
                   <p>管理可访问 ScopePilot 工作区的成员与角色。</p>
                 </div>
-                <button className="button button-primary button-small" type="button" onClick={() => setShowInvite(true)}>
+                {user?.role === 'admin' && <button className="button button-primary button-small" type="button" onClick={() => setShowInvite(true)}>
                   <Plus size={14} /> 邀请成员
-                </button>
+                </button>}
               </div>
               {members.length === 0 ? (
                 <div className="empty-state">
@@ -250,12 +305,19 @@ export default function Settings() {
                       <div>
                         <h3>{member.name}</h3>
                         <p>{member.email}</p>
+                        <small>{member.status === 'invited' ? '等待接受邀请' : '已加入'}</small>
                       </div>
                       <div className="row-actions">
-                        <span className={`status-badge ${roleClass(member.role)}`}>{roleLabel(member.role)}</span>
-                        <button className="button button-danger button-small" type="button" onClick={() => handleRemoveMember(member.id)}>
+                        {user?.role === 'admin' ? (
+                          <select value={member.role} onChange={(event) => handleMemberRole(member.id, event.target.value)}>
+                            <option value="admin">管理员</option>
+                            <option value="member">成员</option>
+                            <option value="viewer">观察者</option>
+                          </select>
+                        ) : <span className={`status-badge ${roleClass(member.role)}`}>{roleLabel(member.role)}</span>}
+                        {user?.role === 'admin' && <button className="button button-danger button-small" type="button" onClick={() => handleRemoveMember(member.id)}>
                           <Trash2 size={13} /> 移除
-                        </button>
+                        </button>}
                       </div>
                     </div>
                   ))}
@@ -301,6 +363,48 @@ export default function Settings() {
                   ))}
                 </div>
               )}
+            </section>
+          )}
+
+          {tab === 'audit' && (
+            <section className="settings-section">
+              <div className="settings-section-header">
+                <div><h2>工作区审计日志</h2><p>记录配置、分析、审核、发布和分享操作。</p></div>
+              </div>
+              {auditLogs.length === 0 ? (
+                <div className="empty-state"><span className="empty-state-icon"><ScrollText size={22} /></span><h2>暂无审计记录</h2><p>执行受审计操作后，记录会显示在这里。</p></div>
+              ) : (
+                <div className="data-list">
+                  {auditLogs.map((item) => (
+                    <div className="data-row" key={item.id}>
+                      <div><h3>{item.action}</h3><p>{item.actor_name || `User #${item.actor_id}`} · {item.resource_type}{item.resource_id ? ` #${item.resource_id}` : ''}</p></div>
+                      <div><span className="status-badge is-info">{new Date(item.created_at).toLocaleString('zh-CN')}</span></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {tab === 'webhooks' && (
+            <section className="settings-section">
+              <div className="settings-section-header"><div><h2>事件 Webhook</h2><p>将分析、审核、同步和报告事件发送到通用地址、Slack 或 Teams。</p></div></div>
+              <div className="form-grid" style={{ paddingBottom: 18 }}>
+                <label className="form-field"><span>名称</span><input value={webhookForm.name} onChange={(event) => setWebhookForm({ ...webhookForm, name: event.target.value })} placeholder="Delivery notifications" /></label>
+                <label className="form-field"><span>提供商</span><select value={webhookForm.provider} onChange={(event) => setWebhookForm({ ...webhookForm, provider: event.target.value })}><option value="generic">Generic</option><option value="slack">Slack</option><option value="teams">Teams</option></select></label>
+                <label className="form-field is-wide"><span>URL</span><input type="url" value={webhookForm.url} onChange={(event) => setWebhookForm({ ...webhookForm, url: event.target.value })} placeholder="https://..." /></label>
+                <label className="form-field"><span>事件</span><input value={webhookForm.events} onChange={(event) => setWebhookForm({ ...webhookForm, events: event.target.value })} placeholder="* 或逗号分隔" /></label>
+                <label className="form-field"><span>签名 Secret</span><input type="password" value={webhookForm.secret} onChange={(event) => setWebhookForm({ ...webhookForm, secret: event.target.value })} /></label>
+              </div>
+              <button className="button button-primary" type="button" onClick={handleCreateWebhook} disabled={!webhookForm.name || !webhookForm.url}>创建 Webhook</button>
+              <div className="data-list" style={{ marginTop: 18 }}>
+                {webhooks.map((item) => (
+                  <div className="data-row" key={item.id}>
+                    <div><h3>{item.name}</h3><p>{item.provider} · {item.events.join(', ')}</p></div>
+                    <button className="button button-danger button-small" type="button" onClick={() => handleDeleteWebhook(item.id)}><Trash2 size={13} /> 删除</button>
+                  </div>
+                ))}
+              </div>
             </section>
           )}
         </main>

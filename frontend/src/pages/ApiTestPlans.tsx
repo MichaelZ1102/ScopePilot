@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
   Download,
@@ -14,6 +15,7 @@ import {
 
 import {
   deleteSpec,
+  analyzeTicketApiImpact,
   exportPlanMarkdown,
   exportPlanPostman,
   generateTestPlan,
@@ -22,30 +24,44 @@ import {
   importSpecFromUrl,
   listSpecs,
   listTestPlans,
+  listProjects,
   type ApiSpec,
+  type Project,
   type TestPlan,
 } from '../lib/api'
 import { getApiErrorMessage } from '../lib/client'
+import { useAuth } from '../lib/AuthContext'
 
 export default function ApiTestPlans() {
+  const { user } = useAuth()
+  const [searchParams] = useSearchParams()
   const [tab, setTab] = useState<'specs' | 'plans'>('specs')
   const [specs, setSpecs] = useState<ApiSpec[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [plans, setPlans] = useState<TestPlan[]>([])
   const [loading, setLoading] = useState(true)
   const [showImport, setShowImport] = useState(false)
   const [importMode, setImportMode] = useState<'url' | 'content'>('url')
-  const [importForm, setImportForm] = useState({ url: '', name: '', content: '' })
+  const [importForm, setImportForm] = useState({
+    url: '',
+    name: '',
+    content: '',
+    project_id: searchParams.get('project_id') || '',
+    service_name: '',
+  })
   const [importing, setImporting] = useState(false)
   const [generatingId, setGeneratingId] = useState<number | null>(null)
+  const [impactingId, setImpactingId] = useState<number | null>(null)
   const [viewPlan, setViewPlan] = useState<TestPlan | null>(null)
 
   useEffect(() => { loadData() }, [])
 
   async function loadData() {
     try {
-      const [loadedSpecs, loadedPlans] = await Promise.all([listSpecs(), listTestPlans()])
+      const [loadedSpecs, loadedPlans, loadedProjects] = await Promise.all([listSpecs(), listTestPlans(), listProjects()])
       setSpecs(loadedSpecs)
       setPlans(loadedPlans)
+      setProjects(loadedProjects)
     } catch {
       setSpecs([])
       setPlans([])
@@ -58,12 +74,18 @@ export default function ApiTestPlans() {
     setImporting(true)
     try {
       if (importMode === 'url') {
-        await importSpecFromUrl(importForm.url, importForm.name)
+        await importSpecFromUrl(importForm.url, importForm.name, Number(importForm.project_id), importForm.service_name)
       } else {
-        await importSpecFromContent(importForm.content, importForm.name)
+        await importSpecFromContent(importForm.content, importForm.name, Number(importForm.project_id), importForm.service_name)
       }
       setShowImport(false)
-      setImportForm({ url: '', name: '', content: '' })
+      setImportForm({
+        url: '',
+        name: '',
+        content: '',
+        project_id: searchParams.get('project_id') || '',
+        service_name: '',
+      })
       await loadData()
     } catch (error: unknown) {
       alert(getApiErrorMessage(error, 'Import failed'))
@@ -85,7 +107,8 @@ export default function ApiTestPlans() {
   async function handleGenerate(specId: number) {
     setGeneratingId(specId)
     try {
-      const plan = await generateTestPlan(specId)
+      const ticketId = Number(searchParams.get('ticket_id'))
+      const plan = await generateTestPlan(specId, Number.isFinite(ticketId) && ticketId > 0 ? [ticketId] : undefined)
       setPlans(await listTestPlans())
       setViewPlan(plan)
       setTab('plans')
@@ -93,6 +116,20 @@ export default function ApiTestPlans() {
       alert(getApiErrorMessage(error, 'Generate failed'))
     } finally {
       setGeneratingId(null)
+    }
+  }
+
+  async function handleAnalyzeImpact(specId: number) {
+    const ticketId = Number(searchParams.get('ticket_id'))
+    if (!Number.isFinite(ticketId) || ticketId <= 0) return
+    setImpactingId(specId)
+    try {
+      const impact = await analyzeTicketApiImpact(specId, ticketId)
+      alert(`API 影响核验完成：确认 ${impact.confirmed_count}，待新增 ${impact.missing_count}。`)
+    } catch (error: unknown) {
+      alert(getApiErrorMessage(error, 'API 影响核验失败'))
+    } finally {
+      setImpactingId(null)
     }
   }
 
@@ -130,6 +167,7 @@ export default function ApiTestPlans() {
       </div>
     )
   }
+  const canWrite = user?.role === 'admin' || user?.role === 'member'
 
   return (
     <div className="workspace-page">
@@ -138,12 +176,13 @@ export default function ApiTestPlans() {
           <span className="workspace-kicker">API Quality Workspace</span>
           <h1>API 测试</h1>
           <p>导入 OpenAPI 定义，生成覆盖正向、异常、边界和安全场景的测试计划。</p>
+          {searchParams.get('ticket_id') && <span className="status-badge is-info">将关联 Ticket #{searchParams.get('ticket_id')}</span>}
         </div>
         <div className="workspace-header-actions">
-          <button className="button button-primary" type="button" onClick={() => setShowImport(true)}>
+          {canWrite && <button className="button button-primary" type="button" onClick={() => setShowImport(true)}>
             <Upload size={17} />
             导入 OpenAPI
-          </button>
+          </button>}
         </div>
       </header>
 
@@ -162,10 +201,10 @@ export default function ApiTestPlans() {
             <span className="empty-state-icon"><FileJson2 size={23} /></span>
             <h2>导入第一份 OpenAPI 定义</h2>
             <p>支持从 URL 或 JSON/YAML 内容导入，导入后即可生成可导出的 API 测试计划。</p>
-            <button className="button button-primary" type="button" onClick={() => setShowImport(true)}>
+            {canWrite && <button className="button button-primary" type="button" onClick={() => setShowImport(true)}>
               <Upload size={16} />
               导入 OpenAPI
-            </button>
+            </button>}
           </section>
         ) : (
           <section className="resource-grid">
@@ -175,7 +214,8 @@ export default function ApiTestPlans() {
                   <span className="resource-icon"><FileJson2 size={19} /></span>
                   <div>
                     <h2>{spec.name}</h2>
-                    <p>{spec.title} · v{spec.version}</p>
+                    <p>{spec.title} · v{spec.version} · revision {spec.revision || 1}</p>
+                    <small>{projects.find((project) => project.id === spec.project_id)?.name || '未关联项目'}{spec.service_name ? ` · ${spec.service_name}` : ''}</small>
                   </div>
                   <span className="status-badge is-info">已导入</span>
                 </div>
@@ -185,7 +225,20 @@ export default function ApiTestPlans() {
                   <span>导入日期<strong>{new Date(spec.created_at).toLocaleDateString('zh-CN')}</strong></span>
                 </div>
                 <p className="resource-meta">{spec.source.slice(0, 100)}</p>
-                <div className="row-actions">
+                {spec.changes && (spec.changes.added.length > 0 || spec.changes.removed.length > 0 || spec.changes.changed.length > 0) && (
+                  <div className="tag-list">
+                    <span className="tag is-success">新增 {spec.changes.added.length}</span>
+                    <span className="tag is-medium">变更 {spec.changes.changed.length}</span>
+                    <span className="tag is-high">移除 {spec.changes.removed.length}</span>
+                  </div>
+                )}
+                {canWrite && <div className="row-actions">
+                  {searchParams.get('ticket_id') && (
+                    <button className="button button-small" type="button" onClick={() => handleAnalyzeImpact(spec.id)} disabled={impactingId === spec.id}>
+                      {impactingId === spec.id ? <LoaderCircle className="spin" size={14} /> : <FileJson2 size={14} />}
+                      {impactingId === spec.id ? '核验中' : '核验 Ticket API'}
+                    </button>
+                  )}
                   <button className="button button-primary button-small" type="button" onClick={() => handleGenerate(spec.id)} disabled={generatingId === spec.id}>
                     {generatingId === spec.id ? <LoaderCircle className="spin" size={14} /> : <Sparkles size={14} />}
                     {generatingId === spec.id ? '生成中' : '生成测试计划'}
@@ -194,7 +247,7 @@ export default function ApiTestPlans() {
                     <Trash2 size={14} />
                     删除
                   </button>
-                </div>
+                </div>}
               </article>
             ))}
           </section>
@@ -253,7 +306,7 @@ export default function ApiTestPlans() {
         )
       )}
 
-      {showImport && (
+      {canWrite && showImport && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowImport(false)}>
           <div className="workspace-modal is-wide" role="dialog" aria-modal="true" aria-labelledby="import-spec-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-header">
@@ -271,6 +324,17 @@ export default function ApiTestPlans() {
                 <button className={`workspace-tab${importMode === 'content' ? ' is-active' : ''}`} type="button" onClick={() => setImportMode('content')}>粘贴内容</button>
               </div>
               <div className="form-grid">
+                <label className="form-field">
+                  <span>所属项目</span>
+                  <select value={importForm.project_id} onChange={(event) => setImportForm({ ...importForm, project_id: event.target.value })} required>
+                    <option value="">选择项目</option>
+                    {projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
+                  </select>
+                </label>
+                <label className="form-field">
+                  <span>服务名称</span>
+                  <input type="text" value={importForm.service_name} onChange={(event) => setImportForm({ ...importForm, service_name: event.target.value })} placeholder="billing-api" />
+                </label>
                 <label className="form-field is-wide">
                   <span>名称</span>
                   <input type="text" value={importForm.name} onChange={(event) => setImportForm({ ...importForm, name: event.target.value })} placeholder="Customer API" />
@@ -293,7 +357,7 @@ export default function ApiTestPlans() {
                   className="button button-primary"
                   type="button"
                   onClick={handleImport}
-                  disabled={importing || !importForm.name || (importMode === 'url' ? !importForm.url : !importForm.content)}
+                  disabled={importing || !importForm.project_id || !importForm.name || (importMode === 'url' ? !importForm.url : !importForm.content)}
                 >
                   {importing ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />}
                   {importing ? '导入中' : '导入 Spec'}

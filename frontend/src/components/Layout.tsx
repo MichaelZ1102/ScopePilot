@@ -3,12 +3,15 @@ import { useTranslation } from 'react-i18next'
 import {
   Code2,
   FolderKanban,
+  FileBarChart,
   Gauge,
   LogOut,
   PenTool,
   ScanSearch,
   Settings,
   TestTube2,
+  ListTodo,
+  Bell,
 } from 'lucide-react'
 
 import { useAuth } from '../lib/AuthContext'
@@ -20,12 +23,15 @@ const navItems = [
   { to: '/code-sources', labelKey: 'nav.code_sources', fallback: 'Codebase', icon: Code2 },
   { to: '/api-test-plans', labelKey: 'nav.api_tests', fallback: 'API 测试', icon: TestTube2 },
   { to: '/figma-designs', labelKey: 'nav.figma', fallback: 'Figma', icon: PenTool },
+  { to: '/reports', labelKey: 'nav.reports', fallback: '报告', icon: FileBarChart },
+  { to: '/analysis-jobs', labelKey: 'nav.analysis_jobs', fallback: '分析任务', icon: ListTodo },
+  { to: '/notifications', labelKey: 'nav.notifications', fallback: '通知', icon: Bell },
   { to: '/settings', labelKey: 'nav.settings', icon: Settings },
 ]
 
 export default function Layout() {
   const { t } = useTranslation()
-  const { logout } = useAuth()
+  const { logout, user } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const isSprintWorkspace = location.pathname.startsWith('/sprint/')
@@ -60,8 +66,8 @@ export default function Layout() {
 
         <div className="app-sidebar-footer">
           <div className="app-user">
-            <span className="app-avatar">DU</span>
-            <span className="app-user-name">Demo User</span>
+            <span className="app-avatar">{(user?.name || 'U').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</span>
+            <span className="app-user-name">{user?.name || 'User'}</span>
           </div>
           <button className="app-logout" type="button" onClick={handleLogout}>
             <LogOut size={18} />
