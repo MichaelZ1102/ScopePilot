@@ -12,7 +12,7 @@ interface Props {
 export function PageState({ loading, error, empty, emptyText = '暂无数据', children }: Props) {
   if (loading) {
     return (
-      <div className="loading-state">
+      <div className="loading-state" role="status" aria-live="polite">
         <span className="loading-state-icon"><LoaderCircle className="spin" size={22} /></span>
         <p>正在加载...</p>
       </div>
@@ -21,7 +21,7 @@ export function PageState({ loading, error, empty, emptyText = '暂无数据', c
 
   if (error) {
     return (
-      <div className="empty-state">
+      <div className="empty-state" role="alert">
         <span className="empty-state-icon"><AlertCircle size={22} /></span>
         <h2>加载失败</h2>
         <p>{error.message}</p>

@@ -1,7 +1,7 @@
 """Figma integration routes: read designs, analyze, generate backend implications."""
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
 from ...services import get_current_user, require_roles
@@ -43,6 +43,12 @@ class FigmaAnalysisResponse(BaseModel):
     created_at: str
     design_tokens: Optional[dict] = None
     frames: Optional[list[dict]] = None
+    pages: Optional[list[dict]] = None
+    selected_nodes: Optional[list[dict]] = None
+    preview_images: Optional[dict[str, str]] = None
+    preview_status: str = "not_requested"
+    preview_error: str = ""
+    analysis_scope: str = "file"
 
 
 # ── Routes ────────────────────────────────────────────────────────────────
@@ -85,11 +91,68 @@ async def analyze_figma_design(
     except FigmaError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Extract design data
+    # Extract design data. An explicit Node ID takes precedence over the URL query.
     document = file_info.get("document", {})
-    frames = FigmaService.extract_frames(document)
-    texts = FigmaService.extract_text_nodes(document)
-    tokens = FigmaService.extract_design_tokens(document)
+    try:
+        node_ids = FigmaService.normalize_node_ids(
+            data.figma_node_id or parsed.get("node_id") or "",
+        )
+        selected_node_data = (
+            await FigmaService.fetch_nodes(parsed["file_key"], node_ids, data.figma_token)
+            if node_ids else {}
+        )
+    except FigmaError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if node_ids:
+        missing_node_ids = [node_id for node_id in node_ids if node_id not in selected_node_data]
+        if missing_node_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Figma nodes not found or inaccessible: {', '.join(missing_node_ids)}",
+            )
+        analysis_document = {
+            "type": "DOCUMENT",
+            "children": [selected_node_data[node_id]["document"] for node_id in node_ids],
+        }
+    else:
+        analysis_document = document
+
+    frames = FigmaService.extract_frames(analysis_document)
+    texts = FigmaService.extract_text_nodes(analysis_document)
+    tokens = FigmaService.extract_design_tokens(analysis_document)
+    pages = FigmaService.extract_pages(document)
+    selected_nodes = [
+        {
+            "id": node_id,
+            "name": selected_node_data[node_id]["document"].get("name", ""),
+            "type": selected_node_data[node_id]["document"].get("type", ""),
+        }
+        for node_id in node_ids
+    ]
+
+    preview_node_ids = node_ids or [
+        item.get("id", "") for item in frames
+        if item.get("id") and item.get("type") in {"FRAME", "COMPONENT", "COMPONENT_SET"}
+    ][:8]
+    preview_images: dict[str, str] = {}
+    preview_status = "not_requested"
+    preview_error = ""
+    if preview_node_ids:
+        try:
+            raw_images = await FigmaService.fetch_node_images(
+                parsed["file_key"], preview_node_ids, data.figma_token,
+            )
+            preview_images = {
+                node_id: url for node_id, url in raw_images.items()
+                if isinstance(url, str) and url.startswith("https://")
+            }
+            preview_status = "available" if preview_images else "unavailable"
+            if not preview_images:
+                preview_error = "Figma did not return renderable images for the selected nodes."
+        except FigmaError as exc:
+            preview_status = "unavailable"
+            preview_error = str(exc)
 
     # Generate implications
     ai_provider = None
@@ -106,6 +169,7 @@ async def analyze_figma_design(
         item for item in FigmaService.list_analyses(workspace_id)
         if item.get("file_key") == parsed["file_key"]
         and item.get("ticket_id") == data.ticket_id
+        and item.get("figma_node_id", "") == ",".join(node_ids)
     ]
     previous = max(
         previous_candidates,
@@ -142,7 +206,7 @@ async def analyze_figma_design(
         "figma_url": data.figma_url,
         "project_id": project_id,
         "ticket_id": data.ticket_id,
-        "figma_node_id": data.figma_node_id,
+        "figma_node_id": ",".join(node_ids),
         "version": (previous or {}).get("version", 0) + 1,
         "previous_analysis_id": (previous or {}).get("id"),
         "changes": changes,
@@ -155,6 +219,12 @@ async def analyze_figma_design(
         "ai_used": implications_data["ai_used"],
         "design_tokens": tokens,
         "frames": frames[:30],  # cap for response size
+        "pages": pages,
+        "selected_nodes": selected_nodes,
+        "preview_images": preview_images,
+        "preview_status": preview_status,
+        "preview_error": preview_error,
+        "analysis_scope": "selected_nodes" if node_ids else "file",
     }
 
     saved = await FigmaService.save_analysis(analysis, workspace_id)
@@ -166,7 +236,7 @@ async def analyze_figma_design(
             ticket_id=data.ticket_id,
             artifact_type="figma_analysis",
             artifact_id=saved["id"],
-            metadata={"figma_node_id": data.figma_node_id},
+            metadata={"figma_node_id": ",".join(node_ids)},
         )
         await LifecycleService.invalidate_review(
             data.ticket_id,
@@ -206,9 +276,17 @@ async def analyze_figma_design(
 
 
 @router.get("/analyses", response_model=list[FigmaAnalysisResponse])
-async def list_analyses(token_data: dict = Depends(get_current_user)):
+async def list_analyses(
+    project_id: Annotated[Optional[int], Query(gt=0)] = None,
+    token_data: dict = Depends(get_current_user),
+):
     """List all Figma design analyses."""
-    return FigmaService.list_analyses(token_data.get("workspace_id"))
+    workspace_id = token_data.get("workspace_id")
+    if project_id is not None:
+        project = ProjectStore.get(project_id)
+        if not project or project.get("workspace_id") != workspace_id:
+            raise HTTPException(status_code=404, detail="Project not found")
+    return FigmaService.list_analyses(workspace_id, project_id)
 
 
 @router.get("/analyses/{analysis_id}", response_model=FigmaAnalysisResponse)

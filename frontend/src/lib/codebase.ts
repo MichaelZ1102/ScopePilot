@@ -1,7 +1,7 @@
 import api from './client'
 import type { CodeSource, RepoSnapshot, CodeImpact } from './types'
 
-export async function listCodeSources() { const r = await api.get('/code-sources/'); return r.data as CodeSource[] }
+export async function listCodeSources(projectId?: number) { const r = await api.get('/code-sources/', { params: projectId ? { project_id: projectId } : undefined }); return r.data as CodeSource[] }
 export async function createCodeSource(d: { project_id?: number; name: string; provider: string; repo_url: string; default_branch?: string; access_token?: string }) { const r = await api.post('/code-sources/', d); return r.data as CodeSource }
 export async function scanCodeSource(id: number) { const r = await api.post(`/code-sources/${id}/scan`); return r.data as RepoSnapshot }
 export const scanRepository = scanCodeSource

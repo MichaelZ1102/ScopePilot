@@ -12,7 +12,7 @@ export interface Sprint {
 }
 export interface SprintDetail extends Sprint {
   project_id: number; jira_sprint_id: number; started_at?: string; ended_at?: string; tickets: TicketDetail[]; analysis_data?: SprintAnalysisData | null
-  latest_analysis_run_id?: number | null; analysis_stale_at?: string | null; last_synced_at?: string | null; updated_at?: string | null
+  latest_analysis_run_id?: number | null; latest_analysis_job_id?: number | null; analysis_stale_at?: string | null; last_synced_at?: string | null; updated_at?: string | null
 }
 export interface Ticket {
   id: number; key: string; summary: string; issue_type?: string; status?: string; priority?: string; assignee?: string
@@ -78,6 +78,12 @@ export interface CodeImpact {
 }
 export interface FigmaAnalysis {
   id: number; project_id?: number | null; ticket_id?: number | null; figma_node_id?: string; version?: number; previous_analysis_id?: number | null; last_modified?: string; changes?: { added_frames: string[]; removed_frames: string[]; changed_frames: string[] } | null; figma_url: string; file_name: string; frame_count: number; text_node_count: number; implications: { priority: string; type: string; title: string; description: string; detail?: Record<string, unknown> }[]; ai_used: boolean; created_at: string; design_tokens?: { colors?: Record<string, string>; spacing?: number[] } | null; frames?: Record<string, unknown>[] | null
+  pages?: Array<{ id: string; name: string; frame_count: number; children_count: number }> | null
+  selected_nodes?: Array<{ id: string; name: string; type: string }> | null
+  preview_images?: Record<string, string> | null
+  preview_status?: 'available' | 'unavailable' | 'not_requested'
+  preview_error?: string
+  analysis_scope?: 'file' | 'selected_nodes'
 }
 
 export interface AnalysisRun {
@@ -176,6 +182,7 @@ export interface SprintReport {
 export interface ReportSnapshot {
   id: number; project_id: number; sprint_id: number; ticket_id?: number | null; report_type: string
   title: string; version: number; status: string; created_at: string; published_at?: string | null; archived_at?: string | null
+  content?: string; structured_content?: SprintReport | Record<string, unknown>; created_by?: number
 }
 
 export interface AuditLog {

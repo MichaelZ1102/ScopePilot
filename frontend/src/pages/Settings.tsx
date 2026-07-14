@@ -7,6 +7,7 @@ import {
   ScrollText,
   Webhook,
   Link2,
+  LoaderCircle,
   Plus,
   Settings2,
   Trash2,
@@ -24,6 +25,9 @@ import {
   deleteWebhook,
   listWebhooks,
   listSharedReports,
+  listProjects,
+  listReportSnapshots,
+  listSprints,
   listTiers,
   removeMember,
   revokeShare,
@@ -33,6 +37,8 @@ import {
   type BillingTier,
   type AuditLog,
   type SharedReport,
+  type Project,
+  type Sprint,
   type TeamMember,
   type UsageData,
   type WebhookSubscription,
@@ -41,6 +47,7 @@ import { getApiErrorMessage } from '../lib/client'
 import { useAuth } from '../lib/AuthContext'
 
 type SettingsTab = 'general' | 'billing' | 'team' | 'sharing' | 'audit' | 'webhooks'
+type ShareSprint = Sprint & { project_id: number; project_name: string }
 
 const tabItems = [
   { id: 'general' as const, label: '通用', icon: Settings2 },
@@ -52,7 +59,7 @@ const tabItems = [
 ]
 
 export default function Settings() {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const { user } = useAuth()
   const [tab, setTab] = useState<SettingsTab>('general')
   const [billing, setBilling] = useState<{ tier?: string } | null>(null)
@@ -62,15 +69,27 @@ export default function Settings() {
   const [showInvite, setShowInvite] = useState(false)
   const [inviteForm, setInviteForm] = useState({ email: '', name: '', role: 'member' })
   const [sharedReports, setSharedReports] = useState<SharedReport[]>([])
+  const [shareProjects, setShareProjects] = useState<Project[]>([])
+  const [shareSprints, setShareSprints] = useState<ShareSprint[]>([])
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([])
   const [webhooks, setWebhooks] = useState<WebhookSubscription[]>([])
   const [webhookForm, setWebhookForm] = useState({ name: '', provider: 'generic', url: '', events: '*', secret: '' })
   const [showShare, setShowShare] = useState(false)
-  const [shareForm, setShareForm] = useState({ sprint_id: '', title: '', password: '' })
+  const [shareForm, setShareForm] = useState({ project_id: '', sprint_id: '', title: '', password: '' })
+  const [loadError, setLoadError] = useState('')
+  const [loadingTab, setLoadingTab] = useState(false)
+
+  const isAdmin = user?.role === 'admin'
+  const canManageReports = isAdmin || user?.role === 'member'
+  const activeAdminCount = members.filter((member) => (
+    member.status === 'active' && member.role === 'admin'
+  )).length
 
   useEffect(() => { loadData() }, [tab])
 
   async function loadData() {
+    setLoadError('')
+    setLoadingTab(tab !== 'general')
     try {
       if (tab === 'billing') {
         setBilling(await getBilling())
@@ -79,14 +98,32 @@ export default function Settings() {
       } else if (tab === 'team') {
         setMembers(await listMembers())
       } else if (tab === 'sharing') {
-        setSharedReports(await listSharedReports())
+        const [reports, projects, snapshots] = await Promise.all([
+          listSharedReports(),
+          listProjects(),
+          listReportSnapshots(),
+        ])
+        const publishedSprintIds = new Set(
+          snapshots.filter((snapshot) => snapshot.status === 'published').map((snapshot) => snapshot.sprint_id),
+        )
+        const sprintGroups = await Promise.all(projects.map(async (project) => {
+          const sprints = await listSprints(project.id)
+          return sprints
+            .filter((sprint) => publishedSprintIds.has(sprint.id))
+            .map((sprint) => ({ ...sprint, project_id: project.id, project_name: project.name }))
+        }))
+        setSharedReports(reports)
+        setShareProjects(projects)
+        setShareSprints(sprintGroups.flat())
       } else if (tab === 'audit') {
         setAuditLogs(await listAuditLogs())
       } else if (tab === 'webhooks') {
         setWebhooks(await listWebhooks())
       }
-    } catch {
-      // Keep the current tab usable when an optional settings endpoint is unavailable.
+    } catch (requestError: unknown) {
+      setLoadError(getApiErrorMessage(requestError, '当前设置数据加载失败。'))
+    } finally {
+      setLoadingTab(false)
     }
   }
 
@@ -121,8 +158,8 @@ export default function Settings() {
     try {
       await removeMember(id)
       await loadData()
-    } catch {
-      alert('操作失败')
+    } catch (error: unknown) {
+      alert(getApiErrorMessage(error, '成员移除失败'))
     }
   }
 
@@ -136,10 +173,11 @@ export default function Settings() {
   }
 
   async function handleShare() {
+    if (!canManageReports) return
     try {
       await shareReport(Number(shareForm.sprint_id), shareForm.title, shareForm.password)
       setShowShare(false)
-      setShareForm({ sprint_id: '', title: '', password: '' })
+      setShareForm({ project_id: '', sprint_id: '', title: '', password: '' })
       await loadData()
     } catch (error: unknown) {
       alert(getApiErrorMessage(error, 'Share failed'))
@@ -151,8 +189,8 @@ export default function Settings() {
     try {
       await revokeShare(id)
       await loadData()
-    } catch {
-      alert('操作失败')
+    } catch (error: unknown) {
+      alert(getApiErrorMessage(error, '撤销分享失败'))
     }
   }
 
@@ -173,13 +211,12 @@ export default function Settings() {
   }
 
   async function handleDeleteWebhook(id: number) {
-    await deleteWebhook(id)
-    await loadData()
-  }
-
-  function handleLanguageChange(event: React.ChangeEvent<HTMLSelectElement>) {
-    i18n.changeLanguage(event.target.value)
-    localStorage.setItem('locale', event.target.value)
+    try {
+      await deleteWebhook(id)
+      await loadData()
+    } catch (error: unknown) {
+      alert(getApiErrorMessage(error, 'Webhook 删除失败'))
+    }
   }
 
   return (
@@ -203,26 +240,26 @@ export default function Settings() {
         </nav>
 
         <main className="workspace-panel">
-          {tab === 'general' && (
+          {loadingTab && <div className="loading-state" role="status" aria-live="polite"><span className="loading-state-icon"><LoaderCircle className="spin" size={20} /></span><p>正在加载设置...</p></div>}
+          {loadError && <div className="inline-error" role="alert">{loadError}</div>}
+
+          {!loadingTab && !loadError && tab === 'general' && (
             <section className="settings-section">
               <div className="settings-section-header">
                 <div>
                   <h2>{t('settings.lang_label')}</h2>
-                  <p>设置工作台界面和系统提示使用的语言。</p>
+                  <p>当前版本仅提供完整的简体中文界面，英文界面仍在完善中。</p>
                 </div>
                 <span className="resource-icon"><Languages size={18} /></span>
               </div>
-              <label className="form-field" style={{ maxWidth: 320 }}>
-                <span>界面语言</span>
-                <select value={i18n.language} onChange={handleLanguageChange}>
-                  <option value="zh">{t('settings.lang_zh')}</option>
-                  <option value="en">{t('settings.lang_en')}</option>
-                </select>
-              </label>
+              <div className="data-row" style={{ maxWidth: 420 }}>
+                <div><h3>简体中文</h3><p>当前完整支持的界面语言</p></div>
+                <span className="status-badge is-success">当前语言</span>
+              </div>
             </section>
           )}
 
-          {tab === 'billing' && (
+          {!loadingTab && !loadError && tab === 'billing' && (
             <>
               {usage && (
                 <section className="settings-section">
@@ -246,8 +283,8 @@ export default function Settings() {
               <section className="settings-section">
                 <div className="settings-section-header">
                   <div>
-                    <h2>套餐选择</h2>
-                    <p>按团队规模和每月分析量选择套餐。</p>
+                    <h2>套餐选择（演示）</h2>
+                    <p>当前仅模拟套餐切换，尚未接入真实支付、订单和订阅权益。</p>
                   </div>
                 </div>
                 <div className="tier-grid">
@@ -268,9 +305,9 @@ export default function Settings() {
                           <li>导出：{tier.export_formats.join(', ')}</li>
                           <li>支持：{tier.support}</li>
                         </ul>
-                        {!isActive && tier.id !== 'free' && (
-                          <button className="button button-primary" type="button" onClick={() => handleUpgrade(tier.id)} disabled={user?.role !== 'admin'}>
-                            升级到 {tier.name}
+                        {isAdmin && !isActive && tier.id !== 'free' && (
+                          <button className="button button-primary" type="button" onClick={() => handleUpgrade(tier.id)}>
+                            切换到 {tier.name}（演示）
                           </button>
                         )}
                       </article>
@@ -281,14 +318,14 @@ export default function Settings() {
             </>
           )}
 
-          {tab === 'team' && (
+          {!loadingTab && !loadError && tab === 'team' && (
             <section className="settings-section">
               <div className="settings-section-header">
                 <div>
                   <h2>团队成员</h2>
                   <p>管理可访问 ScopePilot 工作区的成员与角色。</p>
                 </div>
-                {user?.role === 'admin' && <button className="button button-primary button-small" type="button" onClick={() => setShowInvite(true)}>
+                {isAdmin && <button className="button button-primary button-small" type="button" onClick={() => setShowInvite(true)}>
                   <Plus size={14} /> 邀请成员
                 </button>}
               </div>
@@ -300,42 +337,60 @@ export default function Settings() {
                 </div>
               ) : (
                 <div className="data-list">
-                  {members.map((member) => (
-                    <div className="data-row" key={member.id}>
+                  {members.map((member) => {
+                    const isSelf = member.email.trim().toLowerCase() === user?.email.trim().toLowerCase()
+                    const isLastActiveAdmin = member.status === 'active' && member.role === 'admin' && activeAdminCount <= 1
+                    const isProtectedAdmin = isSelf || isLastActiveAdmin
+                    const protectionReason = isSelf
+                      ? '不能更改或移除自己的管理员账号'
+                      : '工作区必须至少保留一名管理员'
+                    return <div className="data-row" key={member.id}>
                       <div>
                         <h3>{member.name}</h3>
                         <p>{member.email}</p>
                         <small>{member.status === 'invited' ? '等待接受邀请' : '已加入'}</small>
                       </div>
                       <div className="row-actions">
-                        {user?.role === 'admin' ? (
-                          <select value={member.role} onChange={(event) => handleMemberRole(member.id, event.target.value)}>
+                        {isAdmin ? (
+                          <select
+                            aria-label={`修改 ${member.name} 的角色`}
+                            value={member.role}
+                            onChange={(event) => handleMemberRole(member.id, event.target.value)}
+                            disabled={isProtectedAdmin}
+                            title={isProtectedAdmin ? protectionReason : '修改成员角色'}
+                          >
                             <option value="admin">管理员</option>
                             <option value="member">成员</option>
                             <option value="viewer">观察者</option>
                           </select>
                         ) : <span className={`status-badge ${roleClass(member.role)}`}>{roleLabel(member.role)}</span>}
-                        {user?.role === 'admin' && <button className="button button-danger button-small" type="button" onClick={() => handleRemoveMember(member.id)}>
+                        {isAdmin && <button
+                          className="button button-danger button-small"
+                          type="button"
+                          onClick={() => handleRemoveMember(member.id)}
+                          disabled={isProtectedAdmin}
+                          title={isProtectedAdmin ? protectionReason : '移除成员'}
+                        >
                           <Trash2 size={13} /> 移除
                         </button>}
                       </div>
                     </div>
-                  ))}
+                  })}
                 </div>
               )}
             </section>
           )}
 
-          {tab === 'sharing' && (
+          {!loadingTab && !loadError && tab === 'sharing' && (
             <section className="settings-section">
               <div className="settings-section-header">
                 <div>
                   <h2>已分享的报告</h2>
                   <p>管理公开或受密码保护的 Sprint 分析报告链接。</p>
                 </div>
-                <button className="button button-primary button-small" type="button" onClick={() => setShowShare(true)}>
+                {canManageReports && <button className="button button-primary button-small" type="button" onClick={() => setShowShare(true)}>
                   <Plus size={14} /> 分享报告
-                </button>
+                </button>}
               </div>
               {sharedReports.length === 0 ? (
                 <div className="empty-state">
@@ -355,9 +410,9 @@ export default function Settings() {
                         <button className="button button-small" type="button" onClick={() => copyReportLink(report.share_token)}>
                           <Copy size={13} /> 复制链接
                         </button>
-                        <button className="button button-danger button-small" type="button" onClick={() => handleRevoke(report.id)} disabled={!report.is_active}>
+                        {canManageReports && <button className="button button-danger button-small" type="button" onClick={() => handleRevoke(report.id)} disabled={!report.is_active}>
                           {report.is_active ? '撤销' : '已撤销'}
-                        </button>
+                        </button>}
                       </div>
                     </div>
                   ))}
@@ -366,7 +421,7 @@ export default function Settings() {
             </section>
           )}
 
-          {tab === 'audit' && (
+          {!loadingTab && !loadError && tab === 'audit' && (
             <section className="settings-section">
               <div className="settings-section-header">
                 <div><h2>工作区审计日志</h2><p>记录配置、分析、审核、发布和分享操作。</p></div>
@@ -386,7 +441,7 @@ export default function Settings() {
             </section>
           )}
 
-          {tab === 'webhooks' && (
+          {!loadingTab && !loadError && tab === 'webhooks' && (
             <section className="settings-section">
               <div className="settings-section-header"><div><h2>事件 Webhook</h2><p>将分析、审核、同步和报告事件发送到通用地址、Slack 或 Teams。</p></div></div>
               <div className="form-grid" style={{ paddingBottom: 18 }}>
@@ -410,7 +465,7 @@ export default function Settings() {
         </main>
       </div>
 
-      {showInvite && (
+      {isAdmin && showInvite && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowInvite(false)}>
           <div className="workspace-modal" role="dialog" aria-modal="true" aria-labelledby="invite-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-header">
@@ -432,7 +487,7 @@ export default function Settings() {
         </div>
       )}
 
-      {showShare && (
+      {canManageReports && showShare && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowShare(false)}>
           <div className="workspace-modal" role="dialog" aria-modal="true" aria-labelledby="share-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-header">
@@ -441,7 +496,28 @@ export default function Settings() {
             </div>
             <div className="modal-body">
               <div className="form-grid">
-                <label className="form-field"><span>Sprint ID</span><input type="number" value={shareForm.sprint_id} onChange={(event) => setShareForm({ ...shareForm, sprint_id: event.target.value })} placeholder="Sprint ID" /></label>
+                <label className="form-field">
+                  <span>项目</span>
+                  <select value={shareForm.project_id} onChange={(event) => setShareForm({ ...shareForm, project_id: event.target.value, sprint_id: '', title: '' })}>
+                    <option value="">选择项目</option>
+                    {shareProjects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
+                  </select>
+                </label>
+                <label className="form-field">
+                  <span>已发布 Sprint</span>
+                  <select
+                    value={shareForm.sprint_id}
+                    onChange={(event) => {
+                      const sprint = shareSprints.find((item) => item.id === Number(event.target.value))
+                      setShareForm({ ...shareForm, sprint_id: event.target.value, title: sprint ? `${sprint.name} 分析报告` : '' })
+                    }}
+                    disabled={!shareForm.project_id}
+                  >
+                    <option value="">选择 Sprint</option>
+                    {shareSprints.filter((sprint) => sprint.project_id === Number(shareForm.project_id)).map((sprint) => <option value={sprint.id} key={sprint.id}>{sprint.name}</option>)}
+                  </select>
+                  <span className="field-help">仅可分享已经发布的固定版本。</span>
+                </label>
                 <label className="form-field"><span>访问密码</span><input type="text" value={shareForm.password} onChange={(event) => setShareForm({ ...shareForm, password: event.target.value })} placeholder="可选" /></label>
                 <label className="form-field is-wide"><span>报告标题</span><input type="text" value={shareForm.title} onChange={(event) => setShareForm({ ...shareForm, title: event.target.value })} placeholder="Sprint 分析报告" /></label>
               </div>

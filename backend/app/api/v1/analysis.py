@@ -141,6 +141,10 @@ def _run_analysis_background(sprint_id: int, job_id: int, workspace_id: int):
         job = AnalysisJobStore.get(job_id)
         if job and job.get("cancel_requested"):
             asyncio.run(AnalysisService.update_job(job_id, "cancelled"))
+            asyncio.run(SprintStore.update_fields(
+                sprint_id,
+                {"analysis_status": _analysis_status_after_cancel(sprint_id)},
+            ))
             return
         asyncio.run(AnalysisService.analyze_sprint(sprint_id, workspace_id, job_id))
         asyncio.run(AnalysisService.update_job(job_id, "done"))
@@ -157,6 +161,11 @@ def _run_analysis_background(sprint_id: int, job_id: int, workspace_id: int):
     except AnalysisServiceError as exc:
         status = "cancelled" if str(exc) == "Analysis cancelled" else "failed"
         asyncio.run(AnalysisService.update_job(job_id, status, str(exc)))
+        if status == "cancelled":
+            asyncio.run(SprintStore.update_fields(
+                sprint_id,
+                {"analysis_status": _analysis_status_after_cancel(sprint_id)},
+            ))
         asyncio.run(NotificationService.emit(
             workspace_id=workspace_id,
             event_type=f"analysis.{status}",
@@ -167,6 +176,16 @@ def _run_analysis_background(sprint_id: int, job_id: int, workspace_id: int):
             details={"job_id": job_id},
         ))
         pass  # analyze_sprint already sets status=done/failed and persists
+
+
+def _analysis_status_after_cancel(sprint_id: int) -> str:
+    """Restore a truthful Sprint state when a background analysis is cancelled."""
+    sprint = JiraService.get_sprint(sprint_id) or {}
+    if sprint.get("analysis_data"):
+        return "done"
+    if any(ticket.get("analysis_data") for ticket in JiraService.list_tickets(sprint_id)):
+        return "partial"
+    return "pending"
 
 
 @router.get(

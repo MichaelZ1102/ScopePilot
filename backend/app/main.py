@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import ResponseValidationError
-from starlette.responses import JSONResponse
+from starlette.responses import FileResponse, JSONResponse
 from urllib.parse import urlparse
 
 from .config import settings
@@ -136,7 +136,26 @@ app.include_router(notifications.router, prefix="/api/v1/notifications", tags=["
 # Serve frontend static files in production
 frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
-    app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
+    frontend_assets = frontend_dist / "assets"
+    if frontend_assets.exists():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=str(frontend_assets)),
+            name="frontend-assets",
+        )
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend(full_path: str):
+        """Serve built files and fall back to index.html for client-side routes."""
+        if full_path == "api" or full_path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+        dist_root = frontend_dist.resolve()
+        requested_file = (dist_root / full_path).resolve()
+        if requested_file.is_file() and dist_root in requested_file.parents:
+            return FileResponse(requested_file)
+        return FileResponse(dist_root / "index.html")
+
     logger.info("Serving frontend from %s", frontend_dist)
 else:
     logger.info("Frontend dist not found at %s; API only mode", frontend_dist)

@@ -61,6 +61,72 @@
   font-size: 13px;
 }
 
+.report-version-list {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+}
+
+.report-version-list > strong,
+.report-version-list > button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.report-version-list > strong {
+  font-size: 13px;
+}
+
+.report-version-list > button {
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--color-surface-hover);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.report-version-list > button:hover {
+  background: var(--color-border);
+}
+
+.report-version-list > button span {
+  flex: 1;
+  font-weight: 600;
+}
+
+.report-version-list > button small {
+  color: var(--color-text-muted);
+}
+
+.report-snapshot-modal {
+  width: min(920px, calc(100vw - 32px));
+}
+
+.report-snapshot-notice {
+  margin-top: 0;
+  color: var(--color-text-muted);
+}
+
+.report-snapshot-content {
+  max-height: min(65vh, 760px);
+  overflow: auto;
+  margin: 0;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+  font: 13px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .report-card-heading h2 {
   margin: 3px 0 0;
   font-size: 17px;

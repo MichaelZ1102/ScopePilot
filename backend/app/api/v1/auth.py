@@ -228,7 +228,7 @@ async def accept_invite(
     response: Response,
 ):
     """Accept a workspace invitation and create a login account."""
-    from ...services.team import TeamMemberStore
+    from ...services.team import TeamMemberStore, TeamService
     member = next(
         (
             item for item in TeamMemberStore.list_all()
@@ -242,6 +242,14 @@ async def accept_invite(
         raise HTTPException(status_code=404, detail="Invitation not found or already used")
     if _find_user_by_email(req.email):
         raise HTTPException(status_code=400, detail="Email already registered")
+    allowed, reason = await TeamService.check_usage_limit(
+        member["workspace_id"], "members_active",
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=reason + ". Ask an administrator to upgrade the workspace plan.",
+        )
     user_id = UserStore._persist_next_id()
     user = {
         "id": user_id,
@@ -262,6 +270,7 @@ async def accept_invite(
             "joined_at": datetime.now(timezone.utc).isoformat(),
         },
     )
+    await TeamService.sync_members_active(member["workspace_id"])
     token = create_access_token({
         "sub": req.email,
         "user_id": user_id,

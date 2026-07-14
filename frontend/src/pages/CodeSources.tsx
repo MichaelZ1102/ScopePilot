@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Braces,
   ExternalLink,
@@ -34,6 +35,9 @@ const emptyForm = {
 
 export default function CodeSources() {
   const { user } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedProjectId = Number(searchParams.get('project_id'))
+  const projectId = Number.isFinite(requestedProjectId) && requestedProjectId > 0 ? requestedProjectId : undefined
   const [sources, setSources] = useState<CodeSource[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [snapshots, setSnapshots] = useState<Record<number, RepoSnapshot | null>>({})
@@ -42,12 +46,16 @@ export default function CodeSources() {
   const [form, setForm] = useState(emptyForm)
   const [creating, setCreating] = useState(false)
   const [scanningId, setScanningId] = useState<number | null>(null)
+  const [loadError, setLoadError] = useState('')
+  const [actionError, setActionError] = useState('')
 
-  useEffect(() => { loadSources() }, [])
+  useEffect(() => { loadSources() }, [projectId])
 
   async function loadSources() {
+    setLoading(true)
+    setLoadError('')
     try {
-      const [loadedSources, loadedProjects] = await Promise.all([listCodeSources(), listProjects()])
+      const [loadedSources, loadedProjects] = await Promise.all([listCodeSources(projectId), listProjects()])
       setSources(loadedSources)
       setProjects(loadedProjects)
       const entries = await Promise.all(
@@ -60,8 +68,9 @@ export default function CodeSources() {
         }),
       )
       setSnapshots(Object.fromEntries(entries))
-    } catch {
+    } catch (error: unknown) {
       setSources([])
+      setLoadError(getApiErrorMessage(error, '代码源加载失败，请稍后重试。'))
     } finally {
       setLoading(false)
     }
@@ -69,13 +78,14 @@ export default function CodeSources() {
 
   async function handleCreate() {
     setCreating(true)
+    setActionError('')
     try {
       await createCodeSource({ ...form, project_id: Number(form.project_id) })
       setShowCreate(false)
       setForm(emptyForm)
       await loadSources()
-    } catch {
-      alert('创建失败')
+    } catch (error: unknown) {
+      setActionError(getApiErrorMessage(error, '创建失败'))
     } finally {
       setCreating(false)
     }
@@ -86,19 +96,20 @@ export default function CodeSources() {
     try {
       await deleteCodeSource(id)
       await loadSources()
-    } catch {
-      alert('删除失败')
+    } catch (error: unknown) {
+      setActionError(getApiErrorMessage(error, '删除失败'))
     }
   }
 
   async function handleScan(id: number) {
     setScanningId(id)
+    setActionError('')
     try {
       const snapshot = await scanRepository(id)
       setSnapshots((current) => ({ ...current, [id]: snapshot }))
       await loadSources()
     } catch (error: unknown) {
-      alert(getApiErrorMessage(error, 'Scan failed'))
+      setActionError(getApiErrorMessage(error, '扫描失败'))
     } finally {
       setScanningId(null)
     }
@@ -123,19 +134,35 @@ export default function CodeSources() {
           <p>连接代码仓库并生成快照，为 Ticket 分析提供文件、语言和提交证据。</p>
         </div>
         <div className="workspace-header-actions">
-          {canWrite && <button className="button button-primary" type="button" onClick={() => setShowCreate(true)}>
+          <select
+            className="toolbar-input"
+            aria-label="按项目筛选代码源"
+            value={projectId || ''}
+            onChange={(event) => {
+              const next = new URLSearchParams(searchParams)
+              if (event.target.value) next.set('project_id', event.target.value)
+              else next.delete('project_id')
+              setSearchParams(next)
+            }}
+          >
+            <option value="">全部项目</option>
+            {projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
+          </select>
+          {canWrite && <button className="button button-primary" type="button" onClick={() => { setForm({ ...emptyForm, project_id: projectId ? String(projectId) : '' }); setShowCreate(true) }}>
             <Plus size={17} />
             添加代码源
           </button>}
         </div>
       </header>
 
-      {sources.length === 0 ? (
+      {(loadError || actionError) && <div className="inline-error" role="alert">{loadError || actionError}</div>}
+
+      {loadError ? null : sources.length === 0 ? (
         <section className="empty-state">
           <span className="empty-state-icon"><Braces size={23} /></span>
           <h2>连接第一个代码仓库</h2>
-          <p>支持 GitHub、GitLab、Bitbucket 和本地仓库。扫描后可将文件结构关联到单个 Ticket。</p>
-          {canWrite && <button className="button button-primary" type="button" onClick={() => setShowCreate(true)}>
+          <p>支持 GitHub；开发环境可扫描管理员配置的本地目录。GitLab 和 Bitbucket 暂未开放。</p>
+          {canWrite && <button className="button button-primary" type="button" onClick={() => { setForm({ ...emptyForm, project_id: projectId ? String(projectId) : '' }); setShowCreate(true) }}>
             <Plus size={16} />
             添加代码源
           </button>}
@@ -153,13 +180,17 @@ export default function CodeSources() {
                     <p>{source.provider} / {source.default_branch}</p>
                     {source.project_id && <small>{projects.find((project) => project.id === source.project_id)?.name || `Project #${source.project_id}`}</small>}
                   </div>
-                  <StatusBadge status={source.scan_status} />
+                  <StatusBadge status={['github', 'local'].includes(source.provider) ? source.scan_status : 'unsupported'} />
                 </div>
 
                 <div className="resource-meta">
-                  <a href={source.repo_url} target="_blank" rel="noreferrer">
-                    {source.repo_url.replace(/^https?:\/\//, '')} <ExternalLink size={11} />
-                  </a>
+                  {source.provider === 'local' ? (
+                    <code>{source.repo_url}</code>
+                  ) : (
+                    <a href={source.repo_url} target="_blank" rel="noreferrer">
+                      {source.repo_url.replace(/^https?:\/\//, '')} <ExternalLink size={11} />
+                    </a>
+                  )}
                 </div>
 
                 <div className="resource-summary">
@@ -177,7 +208,7 @@ export default function CodeSources() {
                 )}
 
                 {canWrite && <div className="row-actions">
-                  <button className="button button-primary button-small" type="button" onClick={() => handleScan(source.id)} disabled={scanningId === source.id}>
+                  <button className="button button-primary button-small" type="button" onClick={() => handleScan(source.id)} disabled={scanningId === source.id || !['github', 'local'].includes(source.provider)}>
                     <RefreshCw className={scanningId === source.id ? 'spin' : ''} size={14} />
                     {scanningId === source.id ? '扫描中' : '扫描仓库'}
                   </button>
@@ -219,27 +250,28 @@ export default function CodeSources() {
                 </label>
                 <label className="form-field">
                   <span>提供商</span>
-                  <select value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value })}>
+                  <select value={form.provider} onChange={(event) => setForm({ ...form, provider: event.target.value, repo_url: '', access_token: '' })}>
                     <option value="github">GitHub</option>
-                    <option value="gitlab">GitLab</option>
-                    <option value="bitbucket">Bitbucket</option>
-                    <option value="local">Local</option>
+                    <option value="gitlab" disabled>GitLab（暂不支持）</option>
+                    <option value="bitbucket" disabled>Bitbucket（暂不支持）</option>
+                    <option value="local">Local（仅限开发环境允许目录）</option>
                   </select>
                 </label>
                 <label className="form-field is-wide">
-                  <span>仓库 URL</span>
-                  <input type="url" value={form.repo_url} onChange={(event) => setForm({ ...form, repo_url: event.target.value })} placeholder="https://github.com/owner/repo" />
+                  <span>{form.provider === 'local' ? '本地仓库路径' : '仓库 URL'}</span>
+                  <span className="field-help">{form.provider === 'local' ? '路径必须位于服务端配置的允许目录内' : '仅支持 GitHub 仓库根 URL'}</span>
+                  <input type={form.provider === 'local' ? 'text' : 'url'} value={form.repo_url} onChange={(event) => setForm({ ...form, repo_url: event.target.value })} placeholder={form.provider === 'local' ? 'C:\\repos\\my-project' : 'https://github.com/owner/repo'} />
                 </label>
                 <label className="form-field">
                   <span>默认分支</span>
                   <span className="field-help">用于创建仓库快照</span>
                   <input type="text" value={form.default_branch} onChange={(event) => setForm({ ...form, default_branch: event.target.value })} placeholder="main" />
                 </label>
-                <label className="form-field">
+                {form.provider !== 'local' && <label className="form-field">
                   <span>Access Token</span>
                   <span className="field-help">私有仓库需要只读权限</span>
                   <input type="password" value={form.access_token} onChange={(event) => setForm({ ...form, access_token: event.target.value })} placeholder="可选" />
-                </label>
+                </label>}
               </div>
               <div className="modal-actions">
                 <button className="button" type="button" onClick={() => setShowCreate(false)}>取消</button>
@@ -263,6 +295,8 @@ function StatusBadge({ status }: { status: string }) {
       ? 'is-danger'
       : status === 'scanning'
         ? 'is-info'
+        : status === 'unsupported'
+          ? 'is-warning'
         : 'is-warning'
 
   return <span className={`status-badge ${className}`}>{statusLabel(status)}</span>
@@ -274,6 +308,7 @@ function statusLabel(status: string) {
     scanning: '扫描中',
     done: '已扫描',
     failed: '扫描失败',
+    unsupported: '暂不支持',
   }
   return labels[status] || status
 }

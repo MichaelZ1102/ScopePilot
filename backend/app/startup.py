@@ -6,6 +6,8 @@ Also handles migration from old JSON files to SQLite.
 """
 import json
 import logging
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .database import SqliteStore, DB_DIR, DB_PATH
@@ -148,6 +150,44 @@ def load_persisted_data():
             {key: value for key, value in member.items() if key != "id"},
         )
         existing_member_emails.add(identity)
+
+    # Older registrations and owner backfills did not always update usage.
+    # Reconcile from canonical active memberships so limits and UI stay aligned.
+    active_members_by_workspace = Counter(
+        member.get("workspace_id")
+        for member in TeamMemberStore.list_all()
+        if member.get("status", "active") == "active"
+    )
+    now = datetime.now(timezone.utc)
+    for workspace in WorkspaceStore.list_all():
+        workspace_id = workspace["id"]
+        usage = UsageRecordStore.get(workspace_id) or UsageRecordStore.find_by(
+            "workspace_id", workspace_id,
+        )
+        if usage is None:
+            usage = {
+                "id": workspace_id,
+                "workspace_id": workspace_id,
+                "period_start": now.replace(
+                    day=1, hour=0, minute=0, second=0, microsecond=0,
+                ).isoformat(),
+                "period_end": (
+                    now.replace(day=1) + timedelta(days=32)
+                ).replace(day=1).isoformat(),
+                "analyses_run": 0,
+                "repo_scans": 0,
+                "api_specs_imported": 0,
+                "figma_analyses": 0,
+                "projects_count": 0,
+                "sprints_imported": 0,
+            }
+            UsageRecordStore._store[workspace_id] = usage
+        usage["members_active"] = active_members_by_workspace[workspace_id]
+        _upsert(
+            UsageRecordStore._entity_name,
+            usage["id"],
+            {key: value for key, value in usage.items() if key != "id"},
+        )
 
     # Rebuild email index for auth
     from .api.v1.auth import _rebuild_email_index

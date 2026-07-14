@@ -252,9 +252,19 @@ const resources = {
   },
 }
 
+const savedLanguage = localStorage.getItem('locale')
+const detectedLanguage = navigator.language.startsWith('zh') ? 'zh' : 'en'
+const preferredLanguage = savedLanguage === 'zh' || savedLanguage === 'en'
+  ? savedLanguage
+  : detectedLanguage
+// English resources are not complete across every route yet. Keep the
+// preference parsing correct, but expose only the fully supported locale.
+const enabledLanguages = new Set(['zh'])
+const initialLanguage = enabledLanguages.has(preferredLanguage) ? preferredLanguage : 'zh'
+
 i18n.use(initReactI18next).init({
   resources,
-  lng: localStorage.getItem('locale') || navigator.language.startsWith('zh') ? 'zh' : 'en',
+  lng: initialLanguage,
   fallbackLng: 'zh',
   interpolation: {
     escapeValue: false,

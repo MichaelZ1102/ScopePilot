@@ -868,6 +868,16 @@ textarea {
   font-size: 11px;
 }
 
+.inline-message {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  color: #175ea8;
+  border: 1px solid #b8d7f8;
+  border-radius: 6px;
+  background: #edf6ff;
+  font-size: 13px;
+}
+
 .shared-report-page {
   padding: 40px 24px;
 }

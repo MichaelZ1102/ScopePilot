@@ -35,6 +35,8 @@ import { useAuth } from '../lib/AuthContext'
 export default function ApiTestPlans() {
   const { user } = useAuth()
   const [searchParams] = useSearchParams()
+  const requestedProjectId = Number(searchParams.get('project_id'))
+  const projectId = Number.isFinite(requestedProjectId) && requestedProjectId > 0 ? requestedProjectId : undefined
   const [tab, setTab] = useState<'specs' | 'plans'>('specs')
   const [specs, setSpecs] = useState<ApiSpec[]>([])
   const [projects, setProjects] = useState<Project[]>([])
@@ -53,18 +55,24 @@ export default function ApiTestPlans() {
   const [generatingId, setGeneratingId] = useState<number | null>(null)
   const [impactingId, setImpactingId] = useState<number | null>(null)
   const [viewPlan, setViewPlan] = useState<TestPlan | null>(null)
+  const [loadError, setLoadError] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [message, setMessage] = useState('')
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => { loadData() }, [projectId])
 
   async function loadData() {
+    setLoading(true)
+    setLoadError('')
     try {
-      const [loadedSpecs, loadedPlans, loadedProjects] = await Promise.all([listSpecs(), listTestPlans(), listProjects()])
+      const [loadedSpecs, loadedPlans, loadedProjects] = await Promise.all([listSpecs(projectId), listTestPlans(projectId), listProjects()])
       setSpecs(loadedSpecs)
       setPlans(loadedPlans)
       setProjects(loadedProjects)
-    } catch {
+    } catch (error: unknown) {
       setSpecs([])
       setPlans([])
+      setLoadError(getApiErrorMessage(error, 'API 数据加载失败，请稍后重试。'))
     } finally {
       setLoading(false)
     }
@@ -72,6 +80,8 @@ export default function ApiTestPlans() {
 
   async function handleImport() {
     setImporting(true)
+    setActionError('')
+    setMessage('')
     try {
       if (importMode === 'url') {
         await importSpecFromUrl(importForm.url, importForm.name, Number(importForm.project_id), importForm.service_name)
@@ -88,7 +98,7 @@ export default function ApiTestPlans() {
       })
       await loadData()
     } catch (error: unknown) {
-      alert(getApiErrorMessage(error, 'Import failed'))
+      setActionError(getApiErrorMessage(error, '导入失败'))
     } finally {
       setImporting(false)
     }
@@ -99,8 +109,8 @@ export default function ApiTestPlans() {
     try {
       await deleteSpec(id)
       await loadData()
-    } catch {
-      alert('删除失败')
+    } catch (error: unknown) {
+      setActionError(getApiErrorMessage(error, '删除失败'))
     }
   }
 
@@ -109,11 +119,11 @@ export default function ApiTestPlans() {
     try {
       const ticketId = Number(searchParams.get('ticket_id'))
       const plan = await generateTestPlan(specId, Number.isFinite(ticketId) && ticketId > 0 ? [ticketId] : undefined)
-      setPlans(await listTestPlans())
+      setPlans(await listTestPlans(projectId))
       setViewPlan(plan)
       setTab('plans')
     } catch (error: unknown) {
-      alert(getApiErrorMessage(error, 'Generate failed'))
+      setActionError(getApiErrorMessage(error, '测试计划生成失败'))
     } finally {
       setGeneratingId(null)
     }
@@ -125,9 +135,9 @@ export default function ApiTestPlans() {
     setImpactingId(specId)
     try {
       const impact = await analyzeTicketApiImpact(specId, ticketId)
-      alert(`API 影响核验完成：确认 ${impact.confirmed_count}，待新增 ${impact.missing_count}。`)
+      setMessage(`API 影响核验完成：确认 ${impact.confirmed_count}，待新增 ${impact.missing_count}。`)
     } catch (error: unknown) {
-      alert(getApiErrorMessage(error, 'API 影响核验失败'))
+      setActionError(getApiErrorMessage(error, 'API 影响核验失败'))
     } finally {
       setImpactingId(null)
     }
@@ -136,8 +146,8 @@ export default function ApiTestPlans() {
   async function handleViewPlan(planId: number) {
     try {
       setViewPlan(await getTestPlan(planId))
-    } catch {
-      alert('获取计划失败')
+    } catch (error: unknown) {
+      setActionError(getApiErrorMessage(error, '获取计划失败'))
     }
   }
 
@@ -145,8 +155,8 @@ export default function ApiTestPlans() {
     try {
       const { markdown } = await exportPlanMarkdown(planId)
       downloadFile(markdown, `test-plan-${planId}.md`, 'text/markdown')
-    } catch {
-      alert('导出失败')
+    } catch (error: unknown) {
+      setActionError(getApiErrorMessage(error, '导出失败'))
     }
   }
 
@@ -154,8 +164,8 @@ export default function ApiTestPlans() {
     try {
       const { collection } = await exportPlanPostman(planId)
       downloadFile(JSON.stringify(collection, null, 2), `test-plan-${planId}.postman_collection.json`, 'application/json')
-    } catch {
-      alert('导出失败')
+    } catch (error: unknown) {
+      setActionError(getApiErrorMessage(error, '导出失败'))
     }
   }
 
@@ -168,6 +178,9 @@ export default function ApiTestPlans() {
     )
   }
   const canWrite = user?.role === 'admin' || user?.role === 'member'
+  const projectOptions = projectId
+    ? projects.filter((project) => project.id === projectId)
+    : projects
 
   return (
     <div className="workspace-page">
@@ -186,16 +199,20 @@ export default function ApiTestPlans() {
         </div>
       </header>
 
+      {loadError && <div className="inline-error" role="alert">{loadError}</div>}
+      {actionError && <div className="inline-error" role="alert">{actionError}</div>}
+      {message && <div className="inline-message" role="status">{message}</div>}
+
       <div className="workspace-tabs" role="tablist" aria-label="API workspace views">
-        <button className={`workspace-tab${tab === 'specs' ? ' is-active' : ''}`} type="button" onClick={() => { setTab('specs'); setViewPlan(null) }}>
+        <button className={`workspace-tab${tab === 'specs' ? ' is-active' : ''}`} type="button" role="tab" aria-selected={tab === 'specs'} onClick={() => { setTab('specs'); setViewPlan(null) }}>
           <FileJson2 size={15} /> API Specs ({specs.length})
         </button>
-        <button className={`workspace-tab${tab === 'plans' ? ' is-active' : ''}`} type="button" onClick={() => setTab('plans')}>
+        <button className={`workspace-tab${tab === 'plans' ? ' is-active' : ''}`} type="button" role="tab" aria-selected={tab === 'plans'} onClick={() => setTab('plans')}>
           <FlaskConical size={15} /> 测试计划 ({plans.length})
         </button>
       </div>
 
-      {tab === 'specs' && (
+      {tab === 'specs' && !loadError && (
         specs.length === 0 ? (
           <section className="empty-state">
             <span className="empty-state-icon"><FileJson2 size={23} /></span>
@@ -254,7 +271,7 @@ export default function ApiTestPlans() {
         )
       )}
 
-      {tab === 'plans' && (
+      {tab === 'plans' && !loadError && (
         plans.length === 0 ? (
           <section className="empty-state">
             <span className="empty-state-icon"><FlaskConical size={23} /></span>
@@ -328,7 +345,7 @@ export default function ApiTestPlans() {
                   <span>所属项目</span>
                   <select value={importForm.project_id} onChange={(event) => setImportForm({ ...importForm, project_id: event.target.value })} required>
                     <option value="">选择项目</option>
-                    {projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
+                    {projectOptions.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
                   </select>
                 </label>
                 <label className="form-field">

@@ -75,7 +75,7 @@ export function useTickets(sprintId: number) {
 
 // ── Code Sources ─────────────────────────────────────────────────────────
 export function useCodeSources() {
-  return useQuery({ queryKey: queryKeys.codeSources, queryFn: codebase.listCodeSources })
+  return useQuery({ queryKey: queryKeys.codeSources, queryFn: () => codebase.listCodeSources() })
 }
 export function useScanCodeSource() {
   const qc = useQueryClient()
@@ -84,16 +84,12 @@ export function useScanCodeSource() {
 
 // ── API Tests ────────────────────────────────────────────────────────────
 export function useApiSpecs() {
-  return useQuery({ queryKey: queryKeys.apiSpecs, queryFn: apiTests.listApiSpecs })
-}
-export function useCreateApiSpec() {
-  const qc = useQueryClient()
-  return useMutation({ mutationFn: apiTests.createApiSpec, onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.apiSpecs }) })
+  return useQuery({ queryKey: queryKeys.apiSpecs, queryFn: () => apiTests.listApiSpecs() })
 }
 
 // ── Figma ────────────────────────────────────────────────────────────────
 export function useFigmaAnalyses() {
-  return useQuery({ queryKey: queryKeys.figmaAnalyses, queryFn: figma.listFigmaAnalyses })
+  return useQuery({ queryKey: queryKeys.figmaAnalyses, queryFn: () => figma.listFigmaAnalyses() })
 }
 export function useAnalyzeFigma() {
   const qc = useQueryClient()

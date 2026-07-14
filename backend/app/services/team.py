@@ -2,6 +2,7 @@
 
 Phase 5: In-memory store persisted to local JSON via SqliteStore.
 """
+import asyncio
 import json
 import secrets
 import hashlib
@@ -43,6 +44,7 @@ _team_members = TeamMemberStore._store
 _usage_records = UsageRecordStore._store
 _shared_reports = SharedReportStore._store
 _billing: dict[int, dict] = BillingStore._store
+_workspace_member_locks: dict[int, asyncio.Lock] = {}
 
 
 class TeamError(Exception):
@@ -100,6 +102,69 @@ class TeamService:
     def _get_usage_record(workspace_id: int) -> Optional[dict]:
         return UsageRecordStore.get(workspace_id) or UsageRecordStore.find_by("workspace_id", workspace_id)
 
+    @staticmethod
+    def _active_member_count(workspace_id: int) -> int:
+        return sum(
+            1
+            for member in TeamMemberStore.list_by("workspace_id", workspace_id)
+            if member.get("status", "active") == "active"
+        )
+
+    @staticmethod
+    def _workspace_member_lock(workspace_id: int) -> asyncio.Lock:
+        lock = _workspace_member_locks.get(workspace_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _workspace_member_locks[workspace_id] = lock
+        return lock
+
+    @staticmethod
+    def _find_member_user(workspace_id: int, member: dict) -> Optional[dict]:
+        from ..api.v1.auth import UserStore
+
+        email = member.get("email", "").strip().lower()
+        user = UserStore.find_by("email", email)
+        if user and user.get("workspace_id") == workspace_id:
+            return user
+        return None
+
+    @staticmethod
+    def _active_admin_count(workspace_id: int) -> int:
+        """Count administrators who can currently authenticate to the workspace."""
+        from ..api.v1.auth import UserStore
+
+        return sum(
+            1
+            for user in UserStore.list_by("workspace_id", workspace_id)
+            if user.get("role") == "admin"
+        )
+
+    @staticmethod
+    def _is_actor_member(
+        member: dict,
+        user: Optional[dict],
+        actor_user_id: Optional[int],
+        actor_email: str,
+    ) -> bool:
+        if user and actor_user_id is not None and user.get("id") == actor_user_id:
+            return True
+        normalized_actor_email = actor_email.strip().lower()
+        return bool(
+            normalized_actor_email
+            and member.get("email", "").strip().lower() == normalized_actor_email
+        )
+
+    @staticmethod
+    async def _restore_store_record(store, record: dict) -> None:
+        """Best-effort compensation when a multi-store member write fails."""
+        try:
+            if store.get(record["id"]):
+                await store.update_fields(record["id"], record)
+            else:
+                await store._persist_add(record)
+        except Exception:
+            logger.exception("Failed to restore %s record %s", store._entity_name, record["id"])
+
     # ── Workspace Billing ─────────────────────────────────────────────────
 
     @classmethod
@@ -141,7 +206,7 @@ class TeamService:
     # ── Usage Tracking ────────────────────────────────────────────────────
 
     @classmethod
-    async def get_usage(cls, workspace_id: int) -> dict:
+    async def _ensure_usage_record(cls, workspace_id: int) -> dict:
         usage = cls._get_usage_record(workspace_id)
         if not usage:
             now = datetime.now(timezone.utc)
@@ -154,6 +219,23 @@ class TeamService:
             }
             usage["id"] = workspace_id
             await UsageRecordStore._persist_add(usage)
+        return usage
+
+    @classmethod
+    async def sync_members_active(cls, workspace_id: int) -> int:
+        """Keep active-member usage aligned with canonical team membership."""
+        usage = await cls._ensure_usage_record(workspace_id)
+        active_count = cls._active_member_count(workspace_id)
+        if usage.get("members_active") != active_count:
+            await UsageRecordStore.update_fields(
+                usage["id"], {"members_active": active_count},
+            )
+        return active_count
+
+    @classmethod
+    async def get_usage(cls, workspace_id: int) -> dict:
+        usage = await cls._ensure_usage_record(workspace_id)
+        await cls.sync_members_active(workspace_id)
 
         tier_info = TIERS["free"]
         entry = cls._get_billing_entry(workspace_id) or {}
@@ -231,36 +313,102 @@ class TeamService:
                   "invited_at": now,
                   "joined_at": now if user else None}
         await TeamMemberStore._persist_add(member)
-        await cls.increment_usage(workspace_id, "members_active")
+        await cls.sync_members_active(workspace_id)
         return member
 
     @classmethod
-    async def update_member_role(cls, workspace_id: int, member_id: int, role: str) -> Optional[dict]:
-        member = TeamMemberStore.get(member_id)
-        if member and member["workspace_id"] == workspace_id:
-            if role not in ("admin", "member", "viewer"):
-                raise TeamError(f"Invalid role: {role}")
-            member["role"] = role
-            await TeamMemberStore.update_fields(member_id, {"role": role})
+    async def update_member_role(
+        cls,
+        workspace_id: int,
+        member_id: int,
+        role: str,
+        actor_user_id: Optional[int] = None,
+        actor_email: str = "",
+    ) -> Optional[dict]:
+        if role not in ("admin", "member", "viewer"):
+            raise TeamError(f"Invalid role: {role}")
+
+        async with cls._workspace_member_lock(workspace_id):
+            member = TeamMemberStore.get(member_id)
+            if not member or member.get("workspace_id") != workspace_id:
+                return None
+
             from ..api.v1.auth import UserStore
-            user = UserStore.find_by("email", member.get("email", "").lower())
-            if user and user.get("workspace_id") == workspace_id:
-                await UserStore.update_fields(user["id"], {"role": role})
-            return member
-        return None
+
+            user = cls._find_member_user(workspace_id, member)
+            is_self = cls._is_actor_member(
+                member, user, actor_user_id, actor_email,
+            )
+            if is_self and role != "admin":
+                raise TeamError("不能更改自己的管理员角色，请先由另一名管理员接管。")
+            if (
+                user
+                and user.get("role") == "admin"
+                and role != "admin"
+                and cls._active_admin_count(workspace_id) <= 1
+            ):
+                raise TeamError("工作区必须至少保留一名可登录的管理员。")
+
+            previous_member = dict(member)
+            previous_user = dict(user) if user else None
+            if member.get("role") == role and (not user or user.get("role") == role):
+                return member
+
+            try:
+                if user:
+                    updated_user = await UserStore.update_fields(user["id"], {"role": role})
+                    if not updated_user:
+                        raise RuntimeError("User record disappeared during role update")
+                updated_member = await TeamMemberStore.update_fields(member_id, {"role": role})
+                if not updated_member:
+                    raise RuntimeError("Team member disappeared during role update")
+                return updated_member
+            except Exception as exc:
+                await cls._restore_store_record(TeamMemberStore, previous_member)
+                if previous_user:
+                    await cls._restore_store_record(UserStore, previous_user)
+                raise TeamError("团队角色更新失败，已撤销本次变更。") from exc
 
     @classmethod
-    async def remove_member(cls, workspace_id: int, member_id: int) -> bool:
-        member = TeamMemberStore.get(member_id)
-        if member and member["workspace_id"] == workspace_id:
+    async def remove_member(
+        cls,
+        workspace_id: int,
+        member_id: int,
+        actor_user_id: Optional[int] = None,
+        actor_email: str = "",
+    ) -> bool:
+        async with cls._workspace_member_lock(workspace_id):
+            member = TeamMemberStore.get(member_id)
+            if not member or member.get("workspace_id") != workspace_id:
+                return False
+
             from ..api.v1.auth import UserStore
-            user = UserStore.find_by("email", member.get("email", "").lower())
-            if user and user.get("workspace_id") == workspace_id:
-                await UserStore._persist_delete(user["id"])
-            await TeamMemberStore._persist_delete(member_id)
-            await cls.increment_usage(workspace_id, "members_active", -1)
+
+            user = cls._find_member_user(workspace_id, member)
+            if cls._is_actor_member(member, user, actor_user_id, actor_email):
+                raise TeamError("不能移除自己的工作区账号。")
+            if (
+                user
+                and user.get("role") == "admin"
+                and cls._active_admin_count(workspace_id) <= 1
+            ):
+                raise TeamError("工作区必须至少保留一名可登录的管理员。")
+
+            previous_member = dict(member)
+            previous_user = dict(user) if user else None
+            try:
+                if user and not await UserStore._persist_delete(user["id"]):
+                    raise RuntimeError("User record disappeared during member removal")
+                if not await TeamMemberStore._persist_delete(member_id):
+                    raise RuntimeError("Team member disappeared during member removal")
+            except Exception as exc:
+                await cls._restore_store_record(TeamMemberStore, previous_member)
+                if previous_user:
+                    await cls._restore_store_record(UserStore, previous_user)
+                raise TeamError("成员移除失败，已撤销本次变更。") from exc
+
+            await cls.sync_members_active(workspace_id)
             return True
-        return False
 
     # ── Report Sharing ────────────────────────────────────────────────────
 

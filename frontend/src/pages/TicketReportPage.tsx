@@ -256,7 +256,7 @@ export default function TicketReportPage() {
     )
   }
   if (!report) {
-    return <div className="workspace-fatal"><AlertTriangle size={26} /><strong>{error || '报告不存在。'}</strong></div>
+    return <div className="workspace-fatal" role="alert"><AlertTriangle size={26} /><strong>{error || '报告不存在。'}</strong></div>
   }
 
   const { ticket, analysis, artifacts, review } = report
@@ -430,8 +430,26 @@ export default function TicketReportPage() {
           <ReportSection icon={PenTool} title="Figma 影响">
             {artifacts.figma_analyses.length ? artifacts.figma_analyses.map((item) => (
               <div className="artifact-block" key={item.id}>
-                <h3>{item.file_name}</h3>
-                <ItemList items={item.implications.map((implication) => `${implication.title}：${implication.description}`)} />
+                <h3>{item.file_name} · v{item.version || 1}</h3>
+                <div className="metadata-grid">
+                  <Meta label="分析范围" value={item.analysis_scope === 'selected_nodes' ? `Node ${item.figma_node_id}` : '整份文件'} />
+                  <Meta label="Frame/组件" value={String(item.frame_count)} />
+                  <Meta label="文本节点" value={String(item.text_node_count)} />
+                  <Meta label="影响项" value={String(item.implications.length)} />
+                </div>
+                {item.selected_nodes?.length ? <ItemList items={item.selected_nodes.map((node) => `${node.type} · ${node.name || node.id} (${node.id})`)} /> : null}
+                <ItemList items={item.implications.map((implication) => `[${priorityLabel(implication.priority)}] ${implication.title}：${implication.description}`)} />
+                {item.preview_images && Object.entries(item.preview_images).length > 0 && (
+                  <div className="artifact-card-grid">
+                    {Object.entries(item.preview_images).slice(0, 4).map(([nodeId, imageUrl]) => (
+                      <figure className="artifact-mini-card" style={{ margin: 0 }} key={nodeId}>
+                        <img src={imageUrl} alt={`Figma 节点 ${nodeId} 预览`} style={{ width: '100%', maxHeight: 220, objectFit: 'contain', borderRadius: 7 }} />
+                        <span>Node {nodeId}</span>
+                      </figure>
+                    ))}
+                  </div>
+                )}
+                {item.preview_status === 'unavailable' && <p className="muted-copy">预览不可用：{item.preview_error || 'Figma 未返回可渲染图片。'}</p>}
               </div>
             )) : <EmptyCopy text="尚未关联 Figma 分析。" />}
           </ReportSection>
@@ -468,12 +486,12 @@ export default function TicketReportPage() {
               <Meta label="匹配率" value={report.collaboration.delivery_comparison.match_rate == null ? '-' : `${Math.round(report.collaboration.delivery_comparison.match_rate * 100)}%`} />
             </div>
             {canWrite && <div className="delivery-form">
-              <input type="url" value={deliveryDraft.url} onChange={(event) => setDeliveryDraft({ ...deliveryDraft, url: event.target.value })} placeholder="Pull Request / Commit URL" />
-              <input value={deliveryDraft.pull_request} onChange={(event) => setDeliveryDraft({ ...deliveryDraft, pull_request: event.target.value })} placeholder="PR 编号，例如 #123" />
-              <input value={deliveryDraft.commit_sha} onChange={(event) => setDeliveryDraft({ ...deliveryDraft, commit_sha: event.target.value })} placeholder="Commit SHA" />
-              <select value={deliveryDraft.ci_status} onChange={(event) => setDeliveryDraft({ ...deliveryDraft, ci_status: event.target.value })}><option value="unknown">CI 未知</option><option value="pending">CI 运行中</option><option value="passed">CI 通过</option><option value="failed">CI 失败</option></select>
-              <input value={deliveryDraft.release_version} onChange={(event) => setDeliveryDraft({ ...deliveryDraft, release_version: event.target.value })} placeholder="发布版本" />
-              <textarea rows={4} value={deliveryDraft.actual_files} onChange={(event) => setDeliveryDraft({ ...deliveryDraft, actual_files: event.target.value })} placeholder="实际修改文件，每行一个" />
+              <input aria-label="Pull Request 或 Commit URL" type="url" value={deliveryDraft.url} onChange={(event) => setDeliveryDraft({ ...deliveryDraft, url: event.target.value })} placeholder="Pull Request / Commit URL" />
+              <input aria-label="Pull Request 编号" value={deliveryDraft.pull_request} onChange={(event) => setDeliveryDraft({ ...deliveryDraft, pull_request: event.target.value })} placeholder="PR 编号，例如 #123" />
+              <input aria-label="Commit SHA" value={deliveryDraft.commit_sha} onChange={(event) => setDeliveryDraft({ ...deliveryDraft, commit_sha: event.target.value })} placeholder="Commit SHA" />
+              <select aria-label="CI 状态" value={deliveryDraft.ci_status} onChange={(event) => setDeliveryDraft({ ...deliveryDraft, ci_status: event.target.value })}><option value="unknown">CI 未知</option><option value="pending">CI 运行中</option><option value="passed">CI 通过</option><option value="failed">CI 失败</option></select>
+              <input aria-label="发布版本" value={deliveryDraft.release_version} onChange={(event) => setDeliveryDraft({ ...deliveryDraft, release_version: event.target.value })} placeholder="发布版本" />
+              <textarea aria-label="实际修改文件" rows={4} value={deliveryDraft.actual_files} onChange={(event) => setDeliveryDraft({ ...deliveryDraft, actual_files: event.target.value })} placeholder="实际修改文件，每行一个" />
               <button className="button" type="button" onClick={handleAddDelivery} disabled={updating || !deliveryDraft.url.trim()}>保存交付记录</button>
             </div>}
           </ReportSection>
@@ -560,6 +578,10 @@ function NumberedList({ items }: { items: string[] }) {
 
 function EmptyCopy({ text }: { text: string }) {
   return <p className="muted-copy">{text}</p>
+}
+
+function priorityLabel(priority: string) {
+  return ({ high: '高', medium: '中', low: '低' } as Record<string, string>)[priority] || priority
 }
 
 function repoFileUrl(source: TicketReport['artifacts']['code_sources'][number] | undefined, revision: string | undefined, path: string) {

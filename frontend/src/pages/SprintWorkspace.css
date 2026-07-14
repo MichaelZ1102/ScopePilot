@@ -363,26 +363,44 @@
 .ticket-row {
   width: 100%;
   min-height: 78px;
+  position: relative;
+  background: #fff;
+  border-bottom: 1px solid #e9edf2;
+  border-left: 3px solid transparent;
+}
+
+.ticket-row-open {
+  width: 100%;
+  min-height: 77px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 82px 82px;
   align-items: center;
   gap: 8px;
   padding: 11px 16px 11px 20px;
   text-align: left;
-  background: #fff;
+  background: transparent;
   border: 0;
-  border-bottom: 1px solid #e9edf2;
-  border-left: 3px solid transparent;
   cursor: pointer;
 }
 
-.ticket-row:hover {
+.ticket-row:hover .ticket-row-open {
   background: #f7faff;
 }
 
 .ticket-row.is-selected {
   border-left-color: #1677e8;
   background: #edf5ff;
+}
+
+.ticket-row-checkbox {
+  position: absolute;
+  top: 18px;
+  left: 20px;
+  z-index: 1;
+}
+
+.ticket-row.has-selection .ticket-row-open {
+  padding-left: 40px;
 }
 
 .ticket-main {
@@ -1008,7 +1026,7 @@
   }
 
   .ticket-list-heading,
-  .ticket-row {
+  .ticket-row-open {
     grid-template-columns: minmax(0, 1fr) 76px;
   }
 

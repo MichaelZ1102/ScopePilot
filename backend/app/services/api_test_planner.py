@@ -2,13 +2,17 @@
 
 Phase 3: In-memory store persisted to local JSON via SqliteStore.
 """
+import asyncio
 import json
 import hashlib
+import ipaddress
 import logging
 import re
+import socket
 from datetime import datetime, timezone
 from typing import Optional
 from collections import defaultdict
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from pydantic import BaseModel, Field
@@ -83,6 +87,17 @@ class TestPlan(BaseModel):
 class ApiTestPlannerService:
     """Service for parsing OpenAPI specs and generating AI test plans."""
 
+    _MAX_SPEC_BYTES = 2_000_000
+    _MAX_REDIRECTS = 3
+    _ALLOWED_SPEC_MEDIA_TYPES = {
+        "application/json",
+        "application/yaml",
+        "application/x-yaml",
+        "text/plain",
+        "text/yaml",
+        "text/x-yaml",
+    }
+
     # ── Spec Management ──────────────────────────────────────────────────
 
     @classmethod
@@ -96,19 +111,150 @@ class ApiTestPlannerService:
     ) -> dict:
         """Fetch and parse an OpenAPI spec from a URL."""
         try:
-            resp = httpx.get(url, follow_redirects=True, timeout=30)
-            resp.raise_for_status()
-            raw = resp.text
-        except Exception as e:
-            raise ApiTestPlanError(f"Failed to fetch spec from {url}: {e}")
+            raw, final_url = await cls._fetch_public_spec(url)
+        except ApiTestPlanError:
+            raise
+        except Exception as exc:
+            logger.warning("OpenAPI URL import failed: %s", exc)
+            raise ApiTestPlanError("Failed to fetch OpenAPI spec") from exc
 
         return await cls._store_spec(
             raw,
-            url,
+            final_url,
             name,
             workspace_id,
             project_id=project_id,
             service_name=service_name,
+        )
+
+    @classmethod
+    async def _fetch_public_spec(cls, url: str) -> tuple[str, str]:
+        """Fetch a small public OpenAPI document without following unsafe redirects."""
+        current_url = url.strip()
+        timeout = httpx.Timeout(15.0, connect=5.0)
+        headers = {
+            "Accept": "application/json, application/yaml, text/yaml, text/plain",
+            "User-Agent": "ScopePilot/0.2",
+        }
+        async with httpx.AsyncClient(timeout=timeout, headers=headers, trust_env=False) as client:
+            for redirect_count in range(cls._MAX_REDIRECTS + 1):
+                await cls._validate_public_url(current_url)
+                async with client.stream(
+                    "GET",
+                    current_url,
+                    follow_redirects=False,
+                ) as response:
+                    cls._validate_connected_peer(response)
+                    if response.is_redirect:
+                        if redirect_count >= cls._MAX_REDIRECTS:
+                            raise ApiTestPlanError("OpenAPI URL redirected too many times")
+                        location = response.headers.get("location")
+                        if not location:
+                            raise ApiTestPlanError("OpenAPI URL returned an invalid redirect")
+                        current_url = urljoin(current_url, location)
+                        continue
+
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        raise ApiTestPlanError(
+                            f"OpenAPI URL returned HTTP {response.status_code}"
+                        ) from exc
+
+                    media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    if not cls._is_allowed_spec_media_type(media_type):
+                        raise ApiTestPlanError(
+                            "OpenAPI URL must return JSON, YAML, or plain text content"
+                        )
+                    content_length = response.headers.get("content-length")
+                    if content_length:
+                        try:
+                            declared_size = int(content_length)
+                            if declared_size < 0:
+                                raise ValueError
+                            if declared_size > cls._MAX_SPEC_BYTES:
+                                raise ApiTestPlanError("OpenAPI document exceeds the 2 MB limit")
+                        except ValueError as exc:
+                            raise ApiTestPlanError("OpenAPI URL returned an invalid Content-Length") from exc
+
+                    chunks: list[bytes] = []
+                    size = 0
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > cls._MAX_SPEC_BYTES:
+                            raise ApiTestPlanError("OpenAPI document exceeds the 2 MB limit")
+                        chunks.append(chunk)
+                    try:
+                        return b"".join(chunks).decode("utf-8-sig"), current_url
+                    except UnicodeDecodeError as exc:
+                        raise ApiTestPlanError("OpenAPI document must be UTF-8 encoded") from exc
+
+        raise ApiTestPlanError("Failed to fetch OpenAPI spec")
+
+    @classmethod
+    async def _validate_public_url(cls, url: str) -> None:
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or "\\" in parsed.netloc
+        ):
+            raise ApiTestPlanError("OpenAPI URL must be a public HTTP(S) URL without credentials")
+        hostname = parsed.hostname.rstrip(".").lower()
+        if hostname == "localhost" or hostname.endswith((".localhost", ".local", ".internal")):
+            raise ApiTestPlanError("OpenAPI URL must not target a local or internal host")
+        try:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except ValueError as exc:
+            raise ApiTestPlanError("OpenAPI URL contains an invalid port") from exc
+        try:
+            addresses = await asyncio.to_thread(
+                socket.getaddrinfo,
+                hostname,
+                port,
+                type=socket.SOCK_STREAM,
+            )
+        except socket.gaierror as exc:
+            raise ApiTestPlanError("OpenAPI URL host could not be resolved") from exc
+        resolved_ips = {
+            address[4][0].split("%", 1)[0]
+            for address in addresses
+            if address and address[4]
+        }
+        if not resolved_ips:
+            raise ApiTestPlanError("OpenAPI URL host could not be resolved")
+        for resolved_ip in resolved_ips:
+            cls._require_global_ip(resolved_ip)
+
+    @staticmethod
+    def _require_global_ip(value: str) -> None:
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise ApiTestPlanError("OpenAPI URL resolved to an invalid address") from exc
+        if not address.is_global:
+            raise ApiTestPlanError("OpenAPI URL must not target private or reserved networks")
+
+    @classmethod
+    def _validate_connected_peer(cls, response: httpx.Response) -> None:
+        """Reject a DNS-rebinding connection when the transport exposes its peer."""
+        stream = response.extensions.get("network_stream")
+        if stream is None or not hasattr(stream, "get_extra_info"):
+            return
+        peer = stream.get_extra_info("server_addr")
+        if isinstance(peer, tuple) and peer:
+            cls._require_global_ip(str(peer[0]).split("%", 1)[0])
+        elif isinstance(peer, str):
+            cls._require_global_ip(peer.split("%", 1)[0])
+
+    @classmethod
+    def _is_allowed_spec_media_type(cls, media_type: str) -> bool:
+        return (
+            media_type in cls._ALLOWED_SPEC_MEDIA_TYPES
+            or media_type.endswith("+json")
+            or media_type.endswith("+yaml")
         )
 
     @classmethod
@@ -145,6 +291,8 @@ class ApiTestPlannerService:
         parsed = cls._parse_openapi(raw)
         if not parsed or not isinstance(parsed, dict):
             raise ApiTestPlanError("Invalid OpenAPI spec: could not parse JSON/YAML")
+        if not (parsed.get("openapi") or parsed.get("swagger")) or not isinstance(parsed.get("paths"), dict):
+            raise ApiTestPlanError("Invalid OpenAPI spec: version and paths are required")
 
         # Extract endpoints
         endpoints = cls._extract_endpoints(parsed)
@@ -265,8 +413,12 @@ class ApiTestPlannerService:
             )
 
     @classmethod
-    def list_specs(cls, workspace_id: int) -> list[dict]:
-        return [s for s in _api_specs.values() if s["workspace_id"] == workspace_id]
+    def list_specs(cls, workspace_id: int, project_id: Optional[int] = None) -> list[dict]:
+        return [
+            s for s in _api_specs.values()
+            if s["workspace_id"] == workspace_id
+            and (project_id is None or s.get("project_id") == project_id)
+        ]
 
     @classmethod
     def get_spec(cls, spec_id: int, workspace_id: int) -> Optional[dict]:
@@ -287,7 +439,7 @@ class ApiTestPlannerService:
         spec = cls.get_spec(spec_id, workspace_id)
         if not spec:
             raise ApiTestPlanError("API spec not found")
-        if spec.get("project_id") is not None and spec.get("project_id") != sprint.get("project_id"):
+        if spec.get("project_id") != sprint.get("project_id"):
             raise ApiTestPlanError("API spec belongs to another project")
 
         analysis = ticket.get("analysis_data") or {}
@@ -708,8 +860,12 @@ Return JSON array of scenarios, each with:
     # ── Test Plan Retrieval ──────────────────────────────────────────────
 
     @classmethod
-    def list_plans(cls, workspace_id: int) -> list[dict]:
-        return [p for p in _test_plans.values() if p.get("workspace_id") == workspace_id]
+    def list_plans(cls, workspace_id: int, project_id: Optional[int] = None) -> list[dict]:
+        return [
+            p for p in _test_plans.values()
+            if p.get("workspace_id") == workspace_id
+            and (project_id is None or p.get("project_id") == project_id)
+        ]
 
     @classmethod
     def get_plan(cls, plan_id: int, workspace_id: int) -> Optional[dict]:

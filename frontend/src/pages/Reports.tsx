@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CheckCircle2, FileText, LoaderCircle, Search, ShieldAlert } from 'lucide-react'
+import { CheckCircle2, Eye, FileClock, FileText, LoaderCircle, Search, ShieldAlert, X } from 'lucide-react'
 
 import {
   listProjects,
@@ -10,6 +10,7 @@ import {
   type ReportSnapshot,
   type Sprint,
 } from '../lib/api'
+import { getApiErrorMessage } from '../lib/client'
 import './ReportWorkspace.css'
 
 type SprintEntry = Sprint & { project: Project }
@@ -20,9 +21,12 @@ export default function Reports() {
   const [snapshots, setSnapshots] = useState<ReportSnapshot[]>([])
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
+  const [selectedSnapshot, setSelectedSnapshot] = useState<ReportSnapshot | null>(null)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     async function load() {
+      setError('')
       try {
         const projects = await listProjects()
         const sprintGroups = await Promise.all(
@@ -34,6 +38,8 @@ export default function Reports() {
         const loadedSnapshots = await listReportSnapshots()
         setEntries(sprintGroups.flat())
         setSnapshots(loadedSnapshots)
+      } catch (requestError: unknown) {
+        setError(getApiErrorMessage(requestError, '报告中心加载失败。'))
       } finally {
         setLoading(false)
       }
@@ -77,13 +83,15 @@ export default function Reports() {
         </label>
       </header>
 
+      {error && <div className="inline-error">{error}</div>}
+
       <div className="metric-strip report-metrics">
         <div className="metric-item"><span>Sprint</span><strong>{entries.length}</strong></div>
         <div className="metric-item"><span>已完成分析</span><strong>{entries.filter((item) => item.analysis_status === 'done').length}</strong></div>
         <div className="metric-item"><span>已发布版本</span><strong>{snapshots.filter((item) => item.status === 'published').length}</strong></div>
       </div>
 
-      {filtered.length === 0 ? (
+      {filtered.length === 0 && error ? null : filtered.length === 0 ? (
         <section className="empty-state">
           <span className="empty-state-icon"><FileText size={23} /></span>
           <h2>暂无可用报告</h2>
@@ -114,14 +122,55 @@ export default function Reports() {
                   {entry.analysis_status === 'done' ? <CheckCircle2 size={16} /> : <ShieldAlert size={16} />}
                   <span>{entry.analysis_status === 'done' ? '分析已完成，可以进入审核' : `分析状态：${entry.analysis_status}`}</span>
                 </div>
+                {versions.length > 0 && (
+                  <div className="report-version-list">
+                    <strong><FileClock size={15} /> 历史快照</strong>
+                    {versions.map((snapshot) => (
+                      <button type="button" key={snapshot.id} onClick={() => setSelectedSnapshot(snapshot)}>
+                        <span>v{snapshot.version} · {snapshot.status === 'published' ? '已发布' : snapshot.status === 'archived' ? '已归档' : snapshot.status}</span>
+                        <small>{formatDate(snapshot.published_at || snapshot.created_at)}</small>
+                        <Eye size={14} />
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <button className="button button-primary" type="button" onClick={() => navigate(`/sprints/${entry.id}/report`)}>
-                  查看 Sprint 报告
+                  查看当前草稿
                 </button>
               </article>
             )
           })}
         </section>
       )}
+
+      {selectedSnapshot && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setSelectedSnapshot(null)}>
+          <div className="workspace-modal is-wide report-snapshot-modal" role="dialog" aria-modal="true" aria-labelledby="snapshot-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h2 id="snapshot-title">{selectedSnapshot.title} · v{selectedSnapshot.version}</h2>
+                <p>{selectedSnapshot.status === 'published' ? '已发布快照' : '已归档快照'} · {formatDate(selectedSnapshot.published_at || selectedSnapshot.created_at)}</p>
+              </div>
+              <button className="icon-button" type="button" title="关闭" aria-label="关闭" onClick={() => setSelectedSnapshot(null)}><X size={18} /></button>
+            </div>
+            <div className="modal-body">
+              <p className="report-snapshot-notice">这是发布时保存的不可变内容，不会随当前 Sprint 草稿变化。</p>
+              {selectedSnapshot.content ? (
+                <pre className="report-snapshot-content">{selectedSnapshot.content}</pre>
+              ) : (
+                <div className="inline-error">此历史记录没有可读取的快照内容。</div>
+              )}
+              <div className="modal-actions"><button className="button" type="button" onClick={() => setSelectedSnapshot(null)}>关闭</button></div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return '时间未知'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN')
 }
