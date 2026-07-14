@@ -6,6 +6,11 @@ export async function listAnalysisJobs() {
   return response.data as AnalysisJob[]
 }
 
+export async function getAnalysisJob(jobId: number) {
+  const response = await api.get(`/analysis/jobs/${jobId}`)
+  return response.data as AnalysisJob
+}
+
 export async function cancelAnalysisJob(jobId: number) {
   const response = await api.post(`/analysis/jobs/${jobId}/cancel`)
   return response.data as AnalysisJob

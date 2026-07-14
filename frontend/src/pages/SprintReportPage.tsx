@@ -107,7 +107,7 @@ export default function SprintReportPage() {
   }
 
   if (loading) return <div className="loading-state"><span className="loading-state-icon"><LoaderCircle className="spin" size={22} /></span><p>正在汇总 Sprint 报告...</p></div>
-  if (!report) return <div className="workspace-fatal"><AlertTriangle size={26} /><strong>{error || '报告不存在。'}</strong></div>
+  if (!report) return <div className="workspace-fatal" role="alert"><AlertTriangle size={26} /><strong>{error || '报告不存在。'}</strong></div>
 
   const approved = report.review_counts.approved || 0
   const total = report.tickets.length

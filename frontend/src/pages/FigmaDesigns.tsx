@@ -27,7 +27,10 @@ export default function FigmaDesigns() {
   const [searchParams] = useSearchParams()
   const [analyses, setAnalyses] = useState<FigmaAnalysis[]>([])
   const [projects, setProjects] = useState<Project[]>([])
+  const [projectFilter, setProjectFilter] = useState(searchParams.get('project_id') || '')
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [actionError, setActionError] = useState('')
   const [showAnalyze, setShowAnalyze] = useState(false)
   const [form, setForm] = useState({
     figma_url: '',
@@ -40,18 +43,24 @@ export default function FigmaDesigns() {
   const [analyzing, setAnalyzing] = useState(false)
   const [viewResult, setViewResult] = useState<FigmaAnalysis | null>(null)
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => { loadData() }, [projectFilter])
   useEffect(() => {
     if (searchParams.get('ticket_id') && user?.role !== 'viewer') setShowAnalyze(true)
   }, [searchParams, user?.role])
 
   async function loadData() {
+    setLoading(true)
+    setLoadError('')
     try {
-      const [loadedAnalyses, loadedProjects] = await Promise.all([listFigmaAnalyses(), listProjects()])
+      const [loadedAnalyses, loadedProjects] = await Promise.all([
+        listFigmaAnalyses(projectFilter ? Number(projectFilter) : undefined),
+        listProjects(),
+      ])
       setAnalyses(loadedAnalyses)
       setProjects(loadedProjects)
-    } catch {
+    } catch (error: unknown) {
       setAnalyses([])
+      setLoadError(getApiErrorMessage(error, 'Figma 分析记录加载失败。'))
     } finally {
       setLoading(false)
     }
@@ -59,6 +68,7 @@ export default function FigmaDesigns() {
 
   async function handleAnalyze() {
     setAnalyzing(true)
+    setActionError('')
     try {
       const result = await analyzeFigmaDesign(
         form.figma_url,
@@ -75,7 +85,7 @@ export default function FigmaDesigns() {
       await loadData()
       setViewResult(result)
     } catch (error: unknown) {
-      alert(getApiErrorMessage(error, 'Analysis failed'))
+      setActionError(getApiErrorMessage(error, 'Figma 分析失败'))
     } finally {
       setAnalyzing(false)
     }
@@ -83,12 +93,13 @@ export default function FigmaDesigns() {
 
   async function handleDelete(id: number) {
     if (!confirm('确定删除该分析结果吗？')) return
+    setActionError('')
     try {
       await deleteFigmaAnalysis(id)
       setViewResult(null)
       await loadData()
     } catch {
-      alert('删除失败')
+      setActionError('删除失败')
     }
   }
 
@@ -111,6 +122,13 @@ export default function FigmaDesigns() {
           <p>读取 Figma 页面、组件和设计 Token，并评估 Ticket 对前后端实现的影响。</p>
         </div>
         <div className="workspace-header-actions">
+          <label className="form-field" style={{ minWidth: 210 }}>
+            <span>项目范围</span>
+            <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
+              <option value="">全部项目</option>
+              {projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
+            </select>
+          </label>
           {canWrite && <button className="button button-primary" type="button" onClick={() => setShowAnalyze(true)}>
             <Sparkles size={17} />
             分析 Figma 设计
@@ -118,7 +136,10 @@ export default function FigmaDesigns() {
         </div>
       </header>
 
-      {viewResult ? (
+      {loadError && <div className="inline-error">{loadError}</div>}
+      {actionError && <div className="inline-error" role="alert">{actionError}</div>}
+
+      {loadError ? null : viewResult ? (
         <AnalysisDetail analysis={viewResult} onBack={() => setViewResult(null)} onDelete={canWrite ? handleDelete : undefined} />
       ) : analyses.length === 0 ? (
         <section className="empty-state">
@@ -190,6 +211,7 @@ export default function FigmaDesigns() {
                 </label>
                 <label className="form-field">
                   <span>Figma Node ID</span>
+                  <span className="field-help">可留空分析整份文件；填写后仅分析指定节点，也可用逗号分隔多个节点。</span>
                   <input type="text" value={form.figma_node_id} onChange={(event) => setForm({ ...form, figma_node_id: event.target.value })} placeholder="可选，例如 123:456" />
                 </label>
                 <label className="form-field is-wide">
@@ -252,6 +274,61 @@ function AnalysisDetail({ analysis, onBack, onDelete }: {
         <div className="metric-item"><span>文本节点</span><strong>{analysis.text_node_count}</strong></div>
         <div className="metric-item"><span>实现影响项</span><strong>{analysis.implications.length}</strong></div>
       </div>
+
+      <section className="workspace-panel" style={{ marginBottom: 16 }}>
+        <div className="panel-header">
+          <div>
+            <h2>分析范围</h2>
+            <p>{analysis.analysis_scope === 'selected_nodes' ? `节点级分析：${analysis.figma_node_id}` : '整份 Figma 文件'}</p>
+          </div>
+          <a className="button button-secondary button-small" href={analysis.figma_url} target="_blank" rel="noreferrer">在 Figma 中打开</a>
+        </div>
+        <div className="settings-section">
+          {analysis.selected_nodes?.length ? (
+            <div className="tag-list">
+              {analysis.selected_nodes.map((node) => <span className="tag" key={node.id}>{node.type} · {node.name || node.id}</span>)}
+            </div>
+          ) : <p className="muted-copy">本次分析覆盖文件中的可读取页面、Frame 与组件。</p>}
+        </div>
+      </section>
+
+      {(analysis.pages?.length || analysis.frames?.length) ? (
+        <section className="workspace-panel" style={{ marginBottom: 16 }}>
+          <div className="panel-header"><div><h2>文件结构</h2><p>来自 Figma API 的真实页面、Frame 与组件信息。</p></div></div>
+          <div className="detail-stack" style={{ padding: 12 }}>
+            {analysis.pages?.map((page) => (
+              <article className="detail-card" key={page.id}>
+                <h3>{page.name || page.id}</h3>
+                <p>{page.frame_count} 个顶层 Frame/组件 · {page.children_count} 个直接子节点</p>
+              </article>
+            ))}
+            {analysis.frames?.slice(0, 12).map((frame, index) => (
+              <article className="detail-card" key={String(frame.id || index)}>
+                <h3>{String(frame.name || frame.id || '未命名节点')}</h3>
+                <p>{String(frame.type || 'NODE')}{frame.page_name ? ` · 页面 ${String(frame.page_name)}` : ''} · {String(frame.children_count ?? 0)} 个子节点</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="workspace-panel" style={{ marginBottom: 16 }}>
+        <div className="panel-header"><div><h2>设计预览</h2><p>Figma 渲染接口返回的节点预览；链接可能按 Figma 策略过期。</p></div></div>
+        <div className="settings-section">
+          {analysis.preview_images && Object.keys(analysis.preview_images).length ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+              {Object.entries(analysis.preview_images).map(([nodeId, imageUrl]) => (
+                <figure className="detail-card" style={{ margin: 0 }} key={nodeId}>
+                  <img src={imageUrl} alt={`Figma 节点 ${nodeId} 预览`} style={{ width: '100%', maxHeight: 320, objectFit: 'contain', borderRadius: 8, background: 'var(--color-surface-hover)' }} />
+                  <figcaption className="muted-copy">Node {nodeId}</figcaption>
+                </figure>
+              ))}
+            </div>
+          ) : (
+            <p className="muted-copy">{analysis.preview_error || '当前分析没有可渲染的 Frame/组件预览。'}</p>
+          )}
+        </div>
+      </section>
 
       {analysis.changes && (analysis.changes.added_frames.length > 0 || analysis.changes.removed_frames.length > 0 || analysis.changes.changed_frames.length > 0) && (
         <section className="workspace-panel">

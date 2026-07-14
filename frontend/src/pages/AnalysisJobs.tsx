@@ -74,6 +74,12 @@ export default function AnalysisJobs() {
                   </div>
                   <div className="job-progress"><span style={{ width: `${progress}%` }} /></div>
                   <p>{job.progress_current} / {job.progress_total} Ticket · {progress}%</p>
+                  <div className="metadata-grid">
+                    <div><span>创建时间</span><strong>{formatTime(job.created_at)}</strong></div>
+                    <div><span>开始时间</span><strong>{formatTime(job.started_at)}</strong></div>
+                    <div><span>结束时间</span><strong>{formatTime(job.finished_at)}</strong></div>
+                    <div><span>运行耗时</span><strong>{formatDuration(job.started_at, job.finished_at)}</strong></div>
+                  </div>
                   {job.error_message && <div className="inline-error">{job.error_message}</div>}
                   <div className="row-actions">
                     {['queued', 'running', 'cancel_requested'].includes(job.status) && <button className="button button-danger button-small" type="button" onClick={() => handleCancel(job.id)} disabled={workingId === job.id}><Ban size={14} /> 取消</button>}
@@ -93,4 +99,24 @@ function JobIcon({ status }: { status: AnalysisJob['status'] }) {
   if (status === 'done') return <CheckCircle2 size={16} />
   if (status === 'failed' || status === 'cancelled') return <XCircle size={16} />
   return <LoaderCircle className={status === 'running' ? 'spin' : ''} size={16} />
+}
+
+function formatTime(value?: string | null) {
+  if (!value) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN')
+}
+
+function formatDuration(start?: string | null, end?: string | null) {
+  if (!start) return '尚未开始'
+  const startTime = new Date(start).getTime()
+  const endTime = end ? new Date(end).getTime() : Date.now()
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime < startTime) return '—'
+  const seconds = Math.round((endTime - startTime) / 1000)
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  if (minutes < 60) return `${minutes} 分 ${remainingSeconds} 秒`
+  const hours = Math.floor(minutes / 60)
+  return `${hours} 小时 ${minutes % 60} 分`
 }

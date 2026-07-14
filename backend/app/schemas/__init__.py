@@ -114,6 +114,7 @@ class SprintDetailResponse(SprintResponse):
         description="AI 分析结果，包含 sprint_analysis 和 ticket_analyses",
     )
     latest_analysis_run_id: Optional[int] = None
+    latest_analysis_job_id: Optional[int] = None
     analysis_stale_at: Optional[str] = None
     last_synced_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -158,7 +159,7 @@ class TicketDetailResponse(TicketResponse):
 class CodeSourceCreate(BaseModel):
     project_id: Optional[int] = Field(default=None, gt=0)
     name: str = Field(min_length=1, max_length=120)
-    provider: Literal["github", "gitlab", "bitbucket", "local"] = "github"
+    provider: Literal["github", "local"] = "github"
     repo_url: str = Field(min_length=1, max_length=1000)
     default_branch: str = Field(default="main", min_length=1, max_length=120)
     access_token: str = Field(default="", max_length=4096)

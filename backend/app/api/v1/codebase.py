@@ -19,9 +19,12 @@ router = APIRouter()
 
 
 @router.get("/")
-async def list_sources(token_data: dict = Depends(get_current_user)):
-    """List all code sources for the current workspace."""
-    return CodebaseService.list_sources(token_data.get("workspace_id"))
+async def list_sources(
+    project_id: Annotated[Optional[int], Query(gt=0)] = None,
+    token_data: dict = Depends(get_current_user),
+):
+    """List code sources in the workspace, optionally scoped to one project."""
+    return CodebaseService.list_sources(token_data.get("workspace_id"), project_id)
 
 
 @router.post("/", response_model=CodeSourceResponse, status_code=201)
@@ -34,9 +37,16 @@ async def create_source(
         project = _projects.get(data.project_id)
         if not project or project.get("workspace_id") != token_data.get("workspace_id"):
             raise HTTPException(status_code=404, detail="Project not found")
-    return await CodebaseService.create_source(
-        data.model_dump(), token_data.get("workspace_id"),
-    )
+    source_data = data.model_dump()
+    source_data["repo_url"] = source_data["repo_url"].strip()
+    source_data["default_branch"] = source_data["default_branch"].strip()
+    try:
+        CodebaseService.validate_source_config(source_data)
+        return await CodebaseService.create_source(
+            source_data, token_data.get("workspace_id"),
+        )
+    except CodebaseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{source_id}", response_model=CodeSourceDetailResponse)
@@ -113,7 +123,7 @@ async def analyze_code_impact(
     source = CodebaseService.get_source(source_id, token_data.get("workspace_id"))
     if not source:
         raise HTTPException(status_code=404, detail="Code source not found")
-    if source.get("project_id") is not None and source.get("project_id") != sprint.get("project_id"):
+    if source.get("project_id") != sprint.get("project_id"):
         raise HTTPException(status_code=400, detail="Code source belongs to another project")
     try:
         snapshot = CodebaseService.get_latest_snapshot(

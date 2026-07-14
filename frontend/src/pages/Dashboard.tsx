@@ -25,6 +25,7 @@ import {
   type Project,
   type Sprint,
 } from '../lib/api'
+import { useAuth } from '../lib/AuthContext'
 import { getApiErrorMessage } from '../lib/client'
 import './DashboardWorkspace.css'
 
@@ -36,6 +37,7 @@ const workflowSteps = [
 ]
 
 export default function Dashboard() {
+  const { user } = useAuth()
   const navigate = useNavigate()
   const [projects, setProjects] = useState<Project[]>([])
   const [sprintsMap, setSprintsMap] = useState<Record<number, Sprint[]>>({})
@@ -44,6 +46,8 @@ export default function Dashboard() {
   const [sprintName, setSprintName] = useState('')
   const [importing, setImporting] = useState(false)
   const [error, setError] = useState('')
+  const isAdmin = user?.role === 'admin'
+  const canImport = isAdmin || user?.role === 'member'
 
   useEffect(() => {
     loadData()
@@ -58,13 +62,16 @@ export default function Dashboard() {
       const entries = await Promise.all(
         loadedProjects.map(async (project) => {
           try {
-            return [project.id, await listSprints(project.id)] as const
+            return [project.id, await listSprints(project.id), false] as const
           } catch {
-            return [project.id, []] as const
+            return [project.id, [] as Sprint[], true] as const
           }
         }),
       )
-      setSprintsMap(Object.fromEntries(entries))
+      setSprintsMap(Object.fromEntries(entries.map(([projectId, sprints]) => [projectId, sprints])))
+      if (entries.some(([, , failed]) => failed)) {
+        setError('部分项目的 Sprint 数据加载失败，请稍后刷新重试。')
+      }
     } catch (requestError) {
       setError(getApiErrorMessage(requestError, '仪表盘数据加载失败。'))
     } finally {
@@ -73,6 +80,10 @@ export default function Dashboard() {
   }
 
   async function handleImport() {
+    if (!canImport) {
+      setError('当前角色没有导入 Sprint 的权限。')
+      return
+    }
     if (!importProject || !sprintName.trim()) return
     setImporting(true)
     setError('')
@@ -113,10 +124,10 @@ export default function Dashboard() {
           <h1>分析主页</h1>
           <p>从 Jira Sprint 到需求、代码、API 与设计影响的一站式分析。</p>
         </div>
-        <button className="button button-primary" type="button" onClick={() => navigate('/projects')}>
+        {isAdmin && <button className="button button-primary" type="button" onClick={() => navigate('/projects')}>
           <Plus size={17} />
           创建项目
-        </button>
+        </button>}
       </header>
 
       {error && (
@@ -126,8 +137,8 @@ export default function Dashboard() {
         </div>
       )}
 
-      {projects.length === 0 ? (
-        <EmptyDashboard onCreate={() => navigate('/projects')} />
+      {projects.length === 0 && error ? null : projects.length === 0 ? (
+        <EmptyDashboard canCreate={isAdmin} onCreate={() => navigate('/projects')} />
       ) : (
         <>
           <section className="dashboard-metrics" aria-label="Workspace metrics">
@@ -176,9 +187,9 @@ export default function Dashboard() {
                           继续分析 <ChevronRight size={15} />
                         </button>
                       )}
-                      <button className="button button-primary" type="button" onClick={() => { setImportProject(project); setSprintName('') }}>
+                      {canImport && <button className="button button-primary" type="button" onClick={() => { setImportProject(project); setSprintName('') }}>
                         <Import size={15} /> 导入 Sprint
-                      </button>
+                      </button>}
                     </div>
                   </div>
                 )
@@ -202,7 +213,7 @@ export default function Dashboard() {
         </>
       )}
 
-      {importProject && (
+      {canImport && importProject && (
         <div className="dashboard-modal-backdrop" role="presentation" onMouseDown={() => setImportProject(null)}>
           <div className="dashboard-modal" role="dialog" aria-modal="true" aria-labelledby="import-sprint-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="dashboard-modal-header">
@@ -239,7 +250,7 @@ export default function Dashboard() {
   )
 }
 
-function EmptyDashboard({ onCreate }: { onCreate: () => void }) {
+function EmptyDashboard({ canCreate, onCreate }: { canCreate: boolean; onCreate: () => void }) {
   return (
     <section className="dashboard-empty">
       <div className="empty-intro">
@@ -247,12 +258,14 @@ function EmptyDashboard({ onCreate }: { onCreate: () => void }) {
         <div>
           <span className="dashboard-eyebrow">开始使用 ScopePilot</span>
           <h2>完成第一次 Sprint 影响分析</h2>
-          <p>先连接 Jira 项目，然后导入 Sprint。ScopePilot 会按 Ticket 提炼需求，并关联代码、API 与设计影响。</p>
+          <p>{canCreate
+            ? '先连接 Jira 项目，然后导入 Sprint。ScopePilot 会按 Ticket 提炼需求，并关联代码、API 与设计影响。'
+            : '当前工作区还没有项目，请联系管理员创建并连接 Jira 项目。'}</p>
         </div>
-        <button className="button button-primary empty-primary-action" type="button" onClick={onCreate}>
+        {canCreate && <button className="button button-primary empty-primary-action" type="button" onClick={onCreate}>
           <Plus size={17} />
           创建并连接项目
-        </button>
+        </button>}
       </div>
 
       <div className="workflow-steps">
@@ -269,10 +282,10 @@ function EmptyDashboard({ onCreate }: { onCreate: () => void }) {
         ))}
       </div>
 
-      <div className="empty-footer">
+      {canCreate && <div className="empty-footer">
         <span>已有项目？</span>
         <button type="button" onClick={onCreate}>前往项目页配置 Jira <ArrowRight size={15} /></button>
-      </div>
+      </div>}
     </section>
   )
 }

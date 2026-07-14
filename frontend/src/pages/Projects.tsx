@@ -35,14 +35,16 @@ export default function Projects() {
   const [importProject, setImportProject] = useState<Project | null>(null)
   const [sprintName, setSprintName] = useState('')
   const [importing, setImporting] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => { loadProjects() }, [])
 
   async function loadProjects() {
+    setError('')
     try {
       setProjects(await listProjects())
-    } catch {
-      setProjects([])
+    } catch (requestError: unknown) {
+      setError(getApiErrorMessage(requestError, '项目列表加载失败。'))
     } finally {
       setLoading(false)
     }
@@ -51,13 +53,14 @@ export default function Projects() {
   async function handleCreate(event: FormEvent) {
     event.preventDefault()
     setCreating(true)
+    setError('')
     try {
       await createProject(form)
       setShowCreate(false)
       setForm(emptyForm)
       await loadProjects()
     } catch (error: unknown) {
-      alert(getApiErrorMessage(error, t('projects.create_failed')))
+      setError(getApiErrorMessage(error, t('projects.create_failed')))
     } finally {
       setCreating(false)
     }
@@ -68,8 +71,8 @@ export default function Projects() {
     try {
       await deleteProject(id)
       setProjects((current) => current.filter((project) => project.id !== id))
-    } catch {
-      alert(t('projects.delete_failed'))
+    } catch (requestError: unknown) {
+      setError(getApiErrorMessage(requestError, t('projects.delete_failed')))
     }
   }
 
@@ -82,7 +85,7 @@ export default function Projects() {
       setSprintName('')
       navigate(`/sprint/${sprint.id}`)
     } catch (error: unknown) {
-      alert(getApiErrorMessage(error, t('projects.import_failed')))
+      setError(getApiErrorMessage(error, t('projects.import_failed')))
     } finally {
       setImporting(false)
     }
@@ -115,7 +118,9 @@ export default function Projects() {
         </div>
       </header>
 
-      {projects.length === 0 ? (
+      {error && <div className="inline-error" role="alert">{error}</div>}
+
+      {projects.length === 0 && error ? null : projects.length === 0 ? (
         <section className="empty-state">
           <span className="empty-state-icon"><FolderKanban size={23} /></span>
           <h2>连接第一个 Jira 项目</h2>
@@ -212,7 +217,7 @@ export default function Projects() {
         </div>
       )}
 
-      {importProject && (
+      {canImport && importProject && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setImportProject(null)}>
           <div className="workspace-modal" role="dialog" aria-modal="true" aria-labelledby="import-project-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-header">

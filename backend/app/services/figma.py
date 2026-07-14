@@ -7,6 +7,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 from ..database import SqliteStore
@@ -42,19 +43,33 @@ class FigmaService:
         - https://www.figma.com/file/xxx/Name?node-id=123:456
         - https://www.figma.com/design/xxx/Name?node-id=123:456
         """
-        patterns = [
-            r'(?:file|design)/([a-zA-Z0-9]{10,60})(?:/([^?]+))?(?:\?.*node-id=([\d:]+))?',
-        ]
-        for p in patterns:
-            match = re.search(p, url)
-            if match:
-                result = {
-                    "file_key": match.group(1),
-                    "file_name": match.group(2) or "",
-                    "node_id": match.group(3) or None,
-                }
-                return result
+        parsed_url = urlparse(url)
+        match = re.search(
+            r'/(?:file|design)/([a-zA-Z0-9]{10,60})(?:/([^/?]+))?',
+            parsed_url.path,
+        )
+        if match:
+            node_id = parse_qs(parsed_url.query).get("node-id", [None])[0]
+            return {
+                "file_key": match.group(1),
+                "file_name": unquote(match.group(2) or ""),
+                "node_id": unquote(node_id) if node_id else None,
+            }
         return None
+
+    @staticmethod
+    def normalize_node_ids(value: str) -> list[str]:
+        """Normalize Figma node IDs from form input or URL query parameters."""
+        result: list[str] = []
+        for raw in re.split(r"[,\s]+", unquote(value or "").strip()):
+            if not raw:
+                continue
+            node_id = raw.replace("-", ":")
+            if not re.fullmatch(r"\d+:\d+", node_id):
+                raise FigmaError(f"Invalid Figma node ID: {raw}")
+            if node_id not in result:
+                result.append(node_id)
+        return result
 
     @classmethod
     async def fetch_file_info(
@@ -103,6 +118,31 @@ class FigmaService:
             raise FigmaError(f"Failed to fetch node images: {resp.status_code}")
         return resp.json().get("images", {})
 
+    @classmethod
+    async def fetch_nodes(
+        cls, file_key: str, node_ids: list[str], access_token: str,
+    ) -> dict[str, dict]:
+        """Fetch the requested Figma node documents instead of analyzing the full file."""
+        headers = {"X-Figma-Token": access_token}
+        url = f"https://api.figma.com/v1/files/{file_key}/nodes"
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                url,
+                headers=headers,
+                params={"ids": ",".join(node_ids)},
+                timeout=30,
+            )
+        if resp.status_code == 403:
+            raise FigmaError("Figma API access denied while reading the selected node.")
+        if resp.status_code != 200:
+            raise FigmaError(f"Failed to fetch selected Figma node: {resp.status_code}")
+        nodes = resp.json().get("nodes", {})
+        return {
+            node_id: item
+            for node_id, item in nodes.items()
+            if isinstance(item, dict) and isinstance(item.get("document"), dict)
+        }
+
     # ── Design Analysis ──────────────────────────────────────────────────
 
     @classmethod
@@ -110,18 +150,23 @@ class FigmaService:
         """Extract all frames/pages from a Figma document tree."""
         frames = []
 
-        def walk(node: dict, depth: int = 0):
+        def walk(node: dict, depth: int = 0, page_id: str = "", page_name: str = ""):
             if depth > 20:
                 return
             node_type = node.get("type", "")
             name = node.get("name", "")
             children = node.get("children", [])
+            if node_type == "CANVAS":
+                page_id = node.get("id", "")
+                page_name = name
 
             if node_type in ("FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "GROUP"):
                 frame_info = {
                     "id": node.get("id", ""),
                     "name": name,
                     "type": node_type,
+                    "page_id": page_id,
+                    "page_name": page_name,
                     "visible": node.get("visible", True),
                     "children_count": len(children),
                     "absolute_bounding_box": node.get("absoluteBoundingBox", {}),
@@ -141,10 +186,29 @@ class FigmaService:
                 frames.append(frame_info)
 
             for child in children:
-                walk(child, depth + 1)
+                walk(child, depth + 1, page_id, page_name)
 
         walk(document)
         return frames
+
+    @classmethod
+    def extract_pages(cls, document: dict) -> list[dict]:
+        """Return file page metadata without inventing unavailable design content."""
+        pages = []
+        for page in document.get("children", []):
+            if page.get("type") != "CANVAS":
+                continue
+            children = page.get("children", [])
+            pages.append({
+                "id": page.get("id", ""),
+                "name": page.get("name", ""),
+                "frame_count": sum(
+                    1 for child in children
+                    if child.get("type") in {"FRAME", "COMPONENT", "COMPONENT_SET"}
+                ),
+                "children_count": len(children),
+            })
+        return pages
 
     @classmethod
     def extract_text_nodes(cls, document: dict) -> list[dict]:
@@ -453,8 +517,11 @@ Return a JSON array of implications, each with:
         return None
 
     @classmethod
-    def list_analyses(cls, workspace_id: int) -> list[dict]:
-        return [a for a in _figma_analyses.values() if a.get("workspace_id") == workspace_id]
+    def list_analyses(cls, workspace_id: int, project_id: Optional[int] = None) -> list[dict]:
+        analyses = [a for a in _figma_analyses.values() if a.get("workspace_id") == workspace_id]
+        if project_id is not None:
+            analyses = [a for a in analyses if a.get("project_id") == project_id]
+        return sorted(analyses, key=lambda item: item.get("created_at", ""), reverse=True)
 
     @classmethod
     async def delete_analysis(cls, analysis_id: int, workspace_id: int) -> bool:

@@ -24,7 +24,7 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 
   if (isLoading) {
     return (
-      <div className="loading-state" style={{ minHeight: '100vh', border: 0, borderRadius: 0 }}>
+      <div className="loading-state" role="status" aria-live="polite" style={{ minHeight: '100vh', border: 0, borderRadius: 0 }}>
         <span className="loading-state-icon"><LoaderCircle className="spin" size={22} /></span>
         <p>正在检查登录状态...</p>
       </div>
@@ -40,7 +40,7 @@ function AppContent() {
   if (isLoading) return null
 
   return (
-    <Suspense fallback={<div className="loading-state"><span className="loading-state-icon"><LoaderCircle className="spin" size={22} /></span><p>正在加载页面...</p></div>}>
+    <Suspense fallback={<div className="loading-state" role="status" aria-live="polite"><span className="loading-state-icon"><LoaderCircle className="spin" size={22} /></span><p>正在加载页面...</p></div>}>
       <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/shared/:token" element={<SharedReportPage />} />

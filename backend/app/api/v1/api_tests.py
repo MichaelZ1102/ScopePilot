@@ -1,7 +1,7 @@
 """API Test Plan routes: import OpenAPI specs, generate test plans, export."""
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
 from ...services import get_current_user, require_roles
@@ -121,9 +121,15 @@ async def import_spec_from_content(
 
 
 @router.get("/specs")
-async def list_specs(token_data: dict = Depends(get_current_user)):
-    """List all imported API specs."""
-    return ApiTestPlannerService.list_specs(token_data.get("workspace_id"))
+async def list_specs(
+    project_id: Annotated[Optional[int], Query(gt=0)] = None,
+    token_data: dict = Depends(get_current_user),
+):
+    """List imported API specs, optionally scoped to one project."""
+    return ApiTestPlannerService.list_specs(
+        token_data.get("workspace_id"),
+        project_id,
+    )
 
 
 @router.get("/specs/{spec_id}", response_model=SpecResponse)
@@ -211,7 +217,7 @@ async def generate_test_plan(
         project = ProjectStore.get(sprint.get("project_id"))
         if not project or project.get("workspace_id") != token_data.get("workspace_id"):
             raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
-        if spec.get("project_id") is not None and spec.get("project_id") != sprint.get("project_id"):
+        if spec.get("project_id") != sprint.get("project_id"):
             raise HTTPException(status_code=400, detail=f"Ticket {ticket_id} belongs to another project")
         linked_tickets.append((sprint, ticket))
     try:
@@ -242,9 +248,15 @@ async def generate_test_plan(
 
 
 @router.get("/plans", response_model=list[TestPlanResponse])
-async def list_plans(token_data: dict = Depends(get_current_user)):
-    """List all generated test plans."""
-    return ApiTestPlannerService.list_plans(token_data.get("workspace_id"))
+async def list_plans(
+    project_id: Annotated[Optional[int], Query(gt=0)] = None,
+    token_data: dict = Depends(get_current_user),
+):
+    """List generated test plans, optionally scoped to one project."""
+    return ApiTestPlannerService.list_plans(
+        token_data.get("workspace_id"),
+        project_id,
+    )
 
 
 @router.get("/plans/{plan_id}", response_model=TestPlanResponse)

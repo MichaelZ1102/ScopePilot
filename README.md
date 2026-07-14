@@ -37,12 +37,18 @@ Deploy:     Docker / docker-compose
 ### 1️⃣ 安装依赖
 
 ```bash
-# 后端
-cd backend
-pip install -e .
+# 后端（推荐，严格使用 backend/uv.lock）
+uv sync --project backend --frozen
+
+# 未安装 uv 时，可在项目根目录创建后端专用虚拟环境
+python -m venv backend/.venv
+# Windows
+backend\.venv\Scripts\python -m pip install -e . -e backend
+# Linux/macOS
+# backend/.venv/bin/python -m pip install -e . -e backend
 
 # 前端
-cd ../frontend
+cd frontend
 npm install
 ```
 
@@ -91,7 +97,9 @@ scripts\dev\start.bat dev    # Windows
 ./scripts/dev/start.sh dev   # Linux/Mac
 
 # 方式三：手动
-cd backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+cd backend
+.venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000  # Windows
+# .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000   # Linux/macOS
 ```
 
 ### 5️⃣ 打开浏览器
@@ -186,7 +194,7 @@ ScopePilot/
 │       │   ├── team.ts         # 团队 API
 │       │   ├── hooks.ts        # TanStack Query hooks
 │       │   ├── types.ts        # 类型定义
-│       │   └── i18n.ts         # 中英文国际化
+│       │   └── i18n.ts         # 国际化资源（当前完整支持简体中文）
 │       ├── styles/global.css   # 设计 Token / CSS 变量
 │       └── pages/              # 页面组件
 ├── src/                        # CLI 命令行工具
@@ -209,7 +217,11 @@ ScopePilot/
 - 当前持久化层以本地 SQLite + 进程内缓存为主，适合单实例部署；多实例部署前需要迁移到共享数据库并收口缓存一致性。
 - 后台分析任务已从请求线程移出，但进度推送仍以轮询为主，尚未接入 WebSocket 或任务队列。
 - 前端仍有部分页面使用 inline style 和浏览器 `alert`，后续可继续迁移到统一组件、通知系统和 TanStack Query。
-- 报告导出与共享已可用，但 PDF/Jira 等高级导出能力仍依赖后续实现和环境配置。
+- 报告快照、分享、Markdown/PDF/CSV/JSON 导出以及 Jira/Confluence 回写已实现；PDF 依赖 `reportlab`，外部回写仍需要对应服务凭据和网络连通性。
+- 代码源当前正式支持 GitHub；本地目录扫描仅用于开发环境且受允许目录限制。GitLab 与 Bitbucket 入口暂未开放，不能视为已实现扫描。
+- OpenAPI URL 导入会拒绝本机、私网和云元数据地址；需要导入内网规范时请改用 JSON/YAML 内容上传。
+- 当前完整界面语言为简体中文。英文资源仍在补齐，设置页暂不提供英文切换。
+- 套餐升级仍是产品演示流程，尚未接入真实支付、订单和订阅权益系统。
 
 ---
 

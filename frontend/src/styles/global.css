@@ -67,6 +67,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+:where(button, a, input, select, textarea):focus-visible {
+  outline: 3px solid rgba(35, 131, 246, 0.38) !important;
+  outline-offset: 2px !important;
+}
+
 /* ── Utility Classes ────────────────────────────────────── */
 .card {
   background: var(--color-surface);
@@ -129,4 +134,11 @@ body {
   min-width: 400px;
   max-width: 90vw;
   box-shadow: var(--shadow-lg);
+}
+
+@media (max-width: 480px) {
+  .modal-content {
+    width: calc(100vw - 24px);
+    min-width: 0;
+  }
 }

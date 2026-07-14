@@ -25,10 +25,10 @@
 cd F:\personal-space\Project\ScopePilot
 
 # 生产模式（推荐）
-.\scripts\start.bat prod
+.\scripts\dev\start.bat prod
 
 # 开发模式（前后端分开）
-.\scripts\start.bat dev
+.\scripts\dev\start.bat dev
 ```
 
 访问 **http://localhost:8000**
@@ -141,6 +141,8 @@ Dashboard 显示所有 Sprint 的统计卡片：
 1. 在项目目录运行 `scopepilot scan-local /path/to/repo`
 2. 或者在 Codebase 页面点 **「扫描本地」**
 
+> 本地目录扫描仅面向开发环境，并且只能访问管理员在服务端配置的允许目录。托管/生产环境默认不开放任意服务器路径扫描。GitLab 与 Bitbucket 目前也尚未开放真实扫描能力。
+
 ### 4.2 Code Impact 分析
 
 当 Sprint 有 AI 分析结果 + 代码源时：
@@ -167,6 +169,8 @@ Dashboard 显示所有 Sprint 的统计卡片：
 1. 点 **「导入 OpenAPI」**
 2. 输入 OpenAPI JSON/YAML 内容（或 URL）
 3. 系统自动解析所有 API 端点、参数和响应模型
+
+> URL 导入会阻止 localhost、私网、链路本地和云元数据地址，并限制重定向、响应大小与内容类型。如规范只在内网可见，请使用 JSON/YAML 内容导入。
 
 ### 5.2 生成测试计划
 
@@ -198,8 +202,9 @@ Postman 导出的 JSON 文件可直接在 Postman 中 **Import → Upload Files*
 
 1. 点 **「分析 Figma 设计」**
 2. 输入 Figma 文件链接（格式：`https://www.figma.com/file/xxx/...`）
-3. 点 **「分析」**
-4. 系统自动解析设计稿结构，生成：
+3. 如只需分析指定 Frame/节点，可填写一个或多个 Node ID；留空则分析整个文件
+4. 点 **「分析」**
+5. 系统自动解析设计稿结构，生成：
 
 ### 6.2 分析报告内容
 
@@ -255,6 +260,10 @@ Figma 分析的后端影响部分告诉你这个设计稿上线需要做什么�
    - **密码保护** — 可选
 3. 点 **「创建分享」**
 4. 将链接发给团队或客户
+
+### 7.5 界面语言
+
+当前版本完整支持简体中文。英文资源仍在补齐，为避免出现部分页面中文、部分页面英文的混合状态，设置页暂不提供英文切换。
 
 ---
 

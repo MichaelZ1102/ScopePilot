@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440  # 24h
     cookie_secure: bool = False
+    deployment_environment: str = "production"
+    local_code_scan_roots: list[str] | str = []
     cors_origins: list[str] | str = [
         "http://localhost:5173",
         "http://localhost:3000",
@@ -34,6 +36,13 @@ class Settings(BaseSettings):
     def _parse_cors_origins(cls, value):
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
+
+    @field_validator("local_code_scan_roots", mode="before")
+    @classmethod
+    def _parse_local_code_scan_roots(cls, value):
+        if isinstance(value, str):
+            return [root.strip() for root in value.split(",") if root.strip()]
         return value
 
     @model_validator(mode="after")

@@ -129,7 +129,7 @@ export default function SharedReportPage() {
           </header>
 
           {loading && (
-            <div className="loading-state" style={{ border: 0, borderRadius: 0 }}>
+            <div className="loading-state" role="status" aria-live="polite" style={{ border: 0, borderRadius: 0 }}>
               <span className="loading-state-icon"><LoaderCircle className="spin" size={22} /></span>
               <p>正在加载报告...</p>
             </div>
@@ -138,13 +138,13 @@ export default function SharedReportPage() {
           {needsPassword && !loading && (
             <form className="shared-report-access" onSubmit={handleSubmit}>
               <span className="resource-icon"><LockKeyhole size={18} /></span>
-              <input className="toolbar-input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入报告访问密码" autoFocus />
+              <input className="toolbar-input" aria-label="报告访问密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入报告访问密码" autoFocus />
               <button className="button button-primary" type="submit">打开报告</button>
             </form>
           )}
 
-          {error && !loading && <div className="inline-error" style={{ margin: 24 }}>{error}</div>}
-          {report?.content_error && <div className="inline-error" style={{ margin: 24 }}>{report.content_error}</div>}
+          {error && !loading && <div className="inline-error" role="alert" style={{ margin: 24 }}>{error}</div>}
+          {report?.content_error && <div className="inline-error" role="alert" style={{ margin: 24 }}>{report.content_error}</div>}
 
           {report?.content && (
             <section className="shared-report-content">

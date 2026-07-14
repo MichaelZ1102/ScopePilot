@@ -144,9 +144,16 @@ async def update_member_role(
     token_data: dict = Depends(require_roles("admin")),
 ):
     """Change a member's role."""
-    member = await TeamService.update_member_role(
-        token_data.get("workspace_id"), member_id, data.role,
-    )
+    try:
+        member = await TeamService.update_member_role(
+            token_data.get("workspace_id"),
+            member_id,
+            data.role,
+            actor_user_id=token_data.get("user_id"),
+            actor_email=token_data.get("email", token_data.get("sub", "")),
+        )
+    except TeamError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
     return member
@@ -158,7 +165,16 @@ async def remove_member(
     token_data: dict = Depends(require_roles("admin")),
 ):
     """Remove a member from the workspace."""
-    if not await TeamService.remove_member(token_data.get("workspace_id"), member_id):
+    try:
+        removed = await TeamService.remove_member(
+            token_data.get("workspace_id"),
+            member_id,
+            actor_user_id=token_data.get("user_id"),
+            actor_email=token_data.get("email", token_data.get("sub", "")),
+        )
+    except TeamError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if not removed:
         raise HTTPException(status_code=404, detail="Member not found")
 
 

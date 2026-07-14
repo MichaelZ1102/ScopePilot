@@ -49,7 +49,7 @@ export default function Layout() {
           <span>ScopePilot</span>
         </div>
 
-        <nav className="app-navigation" aria-label="Primary navigation">
+        <nav className="app-navigation" aria-label="主导航">
           {navItems.map(({ to, labelKey, fallback, icon: Icon, end }) => (
             <NavLink
               key={to}

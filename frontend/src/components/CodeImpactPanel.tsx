@@ -10,6 +10,7 @@ import {
 } from '../lib/api'
 
 interface Props {
+  projectId: number
   ticketId: number
   sprintId: number
   summary: string
@@ -17,7 +18,7 @@ interface Props {
   readOnly?: boolean
 }
 
-export default function CodeImpactPanel({ ticketId, sprintId, summary, description, readOnly = false }: Props) {
+export default function CodeImpactPanel({ projectId, ticketId, sprintId, summary, description, readOnly = false }: Props) {
   const [sources, setSources] = useState<CodeSource[]>([])
   const [impact, setImpact] = useState<CodeImpact | null>(null)
   const [loading, setLoading] = useState(false)
@@ -55,7 +56,8 @@ export default function CodeImpactPanel({ ticketId, sprintId, summary, descripti
   async function openSourcePicker() {
     setError('')
     try {
-      setSources(await listCodeSources())
+      const projectSources = await listCodeSources(projectId)
+      setSources(projectSources.filter((source) => source.scan_status === 'done'))
       setShowSources(true)
     } catch {
       setError('代码源加载失败。')
@@ -131,7 +133,7 @@ export default function CodeImpactPanel({ ticketId, sprintId, summary, descripti
                 </button>
               ))}
               {sources.length === 0 && (
-                <div className="analysis-empty-inline">尚未配置代码源，请先前往 Codebase 页面添加。</div>
+                <div className="analysis-empty-inline">当前项目没有已完成扫描的代码源，请先前往 Codebase 页面添加并扫描。</div>
               )}
             </div>
           </div>

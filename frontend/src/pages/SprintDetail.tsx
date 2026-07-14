@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   AlertCircle,
@@ -26,6 +26,7 @@ import CodeImpactPanel from '../components/CodeImpactPanel'
 import {
   analyzeTicket,
   excludeTicketFromReport,
+  getAnalysisJob,
   getProject,
   getSprint,
   includeTicketInReport,
@@ -34,6 +35,7 @@ import {
   triggerAnalysis,
   updateTicketReview,
   type Project,
+  type AnalysisJob,
   type SprintDetail as SprintDetailData,
   type TicketAnalysis,
   type TicketDetail,
@@ -100,6 +102,7 @@ export default function SprintDetail() {
   const [batchWorking, setBatchWorking] = useState(false)
   const [loading, setLoading] = useState(true)
   const [analyzingSprint, setAnalyzingSprint] = useState(false)
+  const [analysisJob, setAnalysisJob] = useState<AnalysisJob | null>(null)
   const [analyzingTicketId, setAnalyzingTicketId] = useState<number | null>(null)
   const [reportUpdating, setReportUpdating] = useState(false)
   const [reviewUpdating, setReviewUpdating] = useState(false)
@@ -131,6 +134,35 @@ export default function SprintDetail() {
   useEffect(() => {
     loadWorkspace()
   }, [loadWorkspace])
+
+  useEffect(() => {
+    const jobId = sprint?.latest_analysis_job_id
+    if (!jobId || sprint?.analysis_status !== 'running') return
+    let disposed = false
+
+    async function refreshJob() {
+      try {
+        const job = await getAnalysisJob(jobId as number)
+        if (disposed) return
+        setAnalysisJob(job)
+        if (['done', 'failed', 'cancelled'].includes(job.status)) {
+          await loadWorkspace(false)
+          if (disposed) return
+          if (job.status === 'done') setMessage(`分析任务 #${job.id} 已完成。`)
+          else setError(job.error_message || `分析任务 #${job.id} ${job.status === 'cancelled' ? '已取消' : '失败'}。`)
+        }
+      } catch (requestError) {
+        if (!disposed) setError(getApiErrorMessage(requestError, `分析任务 #${jobId} 状态加载失败。`))
+      }
+    }
+
+    refreshJob()
+    const timer = window.setInterval(refreshJob, 3000)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [loadWorkspace, sprint?.analysis_status, sprint?.latest_analysis_job_id])
 
   const analysisByTicketKey = useMemo(() => {
     const entries = sprint?.analysis_data?.ticket_analyses || []
@@ -188,6 +220,11 @@ export default function SprintDetail() {
   }, [searchQuery, statusFilter, analysisFilter, priorityFilter, assigneeFilter, reviewFilter, sortBy])
 
   useEffect(() => {
+    const filteredIds = new Set(filteredTickets.map((ticket) => ticket.id))
+    setSelectedTicketIds((current) => current.filter((ticketId) => filteredIds.has(ticketId)))
+  }, [filteredTickets])
+
+  useEffect(() => {
     const next: Record<string, string> = {}
     if (searchQuery) next.q = searchQuery
     if (statusFilter !== 'all') next.status = statusFilter
@@ -217,16 +254,12 @@ export default function SprintDetail() {
     setMessage('')
     setError('')
     try {
-      await triggerAnalysis(sprint.id)
-      setSprint((current) => current ? { ...current, analysis_status: 'running' } : current)
-
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 2000))
-        const latest = await getSprint(sprint.id)
-        setSprint(latest)
-        if (latest.analysis_status !== 'running') break
-      }
-      setMessage('Sprint 分析已更新。')
+      const updated = await triggerAnalysis(sprint.id)
+      setSprint(updated)
+      setAnalysisJob(null)
+      setMessage(updated.latest_analysis_job_id
+        ? `分析任务 #${updated.latest_analysis_job_id} 已提交，可在分析任务中心查看进度。`
+        : '分析任务已提交，可在分析任务中心查看进度。')
     } catch (requestError) {
       setError(getApiErrorMessage(requestError, 'Sprint 分析启动失败。'))
     } finally {
@@ -327,6 +360,26 @@ export default function SprintDetail() {
     ))
   }
 
+  function selectTicket(ticketId: number) {
+    setSelectedTicketId(ticketId)
+    setActiveTab('requirements')
+  }
+
+  function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, tabId: AnalysisTab) {
+    const currentIndex = tabs.findIndex((tabItem) => tabItem.id === tabId)
+    let nextIndex = currentIndex
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabs.length
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabs.length) % tabs.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = tabs.length - 1
+    else return
+
+    event.preventDefault()
+    const nextTab = tabs[nextIndex].id
+    setActiveTab(nextTab)
+    window.requestAnimationFrame(() => document.getElementById(`ticket-tab-${nextTab}`)?.focus())
+  }
+
   async function handleBatchAnalyze() {
     if (!sprint || selectedTicketIds.length === 0) return
     setBatchWorking(true)
@@ -415,7 +468,7 @@ export default function SprintDetail() {
         </div>
         <div className="workspace-topbar-actions">
           <label className="sprint-selector">
-            <select value={sprint.id} onChange={(event) => navigate(`/sprint/${event.target.value}`)}>
+            <select aria-label="切换 Sprint" value={sprint.id} onChange={(event) => navigate(`/sprint/${event.target.value}`)}>
               {sprintOptions.map((option) => <option value={option.id} key={option.id}>{option.name}</option>)}
             </select>
             <ChevronDown size={15} />
@@ -424,9 +477,9 @@ export default function SprintDetail() {
             {syncing ? <LoaderCircle className="spin" size={17} /> : <CloudDownload size={17} />}
             {syncing ? '同步中' : '同步 Jira'}
           </button>}
-          {canWrite && <button className="button button-primary" type="button" onClick={handleAnalyzeSprint} disabled={analyzingSprint}>
-            {analyzingSprint ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />}
-            {analyzingSprint ? '正在分析 Sprint' : '分析全部 Ticket'}
+          {canWrite && <button className="button button-primary" type="button" onClick={handleAnalyzeSprint} disabled={analyzingSprint || sprint.analysis_status === 'running'}>
+            {(analyzingSprint || sprint.analysis_status === 'running') ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />}
+            {analyzingSprint ? '正在提交任务' : sprint.analysis_status === 'running' ? '分析任务进行中' : '分析全部 Ticket'}
           </button>}
         </div>
       </header>
@@ -436,6 +489,18 @@ export default function SprintDetail() {
           {error ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}
           <span>{error || message}</span>
           <button type="button" onClick={() => { setMessage(''); setError('') }}>关闭</button>
+        </div>
+      )}
+
+      {sprint.analysis_status === 'running' && (
+        <div className="workspace-toast">
+          <LoaderCircle className="spin" size={16} />
+          <span>
+            {analysisJob
+              ? `任务 #${analysisJob.id}：${analysisJob.progress_current}/${analysisJob.progress_total} Ticket，状态 ${analysisJob.status}`
+              : `分析任务 #${sprint.latest_analysis_job_id || '-'} 正在队列中。`}
+          </span>
+          <button type="button" onClick={() => navigate('/analysis-jobs')}>查看任务中心</button>
         </div>
       )}
 
@@ -509,42 +574,38 @@ export default function SprintDetail() {
               const active = ticket.id === selectedTicketId
               return (
                 <div
-                  className={`ticket-row${active ? ' is-selected' : ''}`}
+                  className={`ticket-row${active ? ' is-selected' : ''}${canWrite ? ' has-selection' : ''}`}
                   key={ticket.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => {
-                    setSelectedTicketId(ticket.id)
-                    setActiveTab('requirements')
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      setSelectedTicketId(ticket.id)
-                      setActiveTab('requirements')
-                    }
-                  }}
                 >
-                  <span className="ticket-main">
-                    <span className="ticket-key">
-                      {canWrite && <input
-                        type="checkbox"
-                        checked={selectedTicketIds.includes(ticket.id)}
-                        onChange={() => toggleTicketSelection(ticket.id)}
-                        onClick={(event) => event.stopPropagation()}
-                        aria-label={`选择 ${ticket.key}`}
-                      />}
+                  {canWrite && <input
+                    className="ticket-row-checkbox"
+                    type="checkbox"
+                    checked={selectedTicketIds.includes(ticket.id)}
+                    onChange={() => toggleTicketSelection(ticket.id)}
+                    aria-label={`选择 ${ticket.key}`}
+                  />}
+                  <button
+                    className="ticket-row-open"
+                    type="button"
+                    onClick={() => selectTicket(ticket.id)}
+                    aria-label={`打开 ${ticket.key}：${ticket.summary}`}
+                    aria-current={active ? 'true' : undefined}
+                  >
+                    <span className="ticket-main">
+                      <span className="ticket-key">
                       <FileText size={15} /> {ticket.key}
+                      </span>
+                      <strong>{ticket.summary}</strong>
                     </span>
-                    <strong>{ticket.summary}</strong>
-                  </span>
-                  <span className={`priority-indicator ${priorityClass(ticket.priority)}`}>
-                    <span />
-                    {ticket.priority || '未设置'}
-                  </span>
-                  <span className={`analysis-indicator${analysis ? ' is-complete' : ''}`}>
-                    {analysis ? <CheckCircle2 size={15} /> : <Circle size={15} />}
-                    {analysisState(analysis)}
-                  </span>
+                    <span className={`priority-indicator ${priorityClass(ticket.priority)}`}>
+                      <span />
+                      {ticket.priority || '未设置'}
+                    </span>
+                    <span className={`analysis-indicator${analysis ? ' is-complete' : ''}`}>
+                      {analysis ? <CheckCircle2 size={15} /> : <Circle size={15} />}
+                      {analysisState(analysis)}
+                    </span>
+                  </button>
                 </div>
               )
             })}
@@ -594,11 +655,15 @@ export default function SprintDetail() {
                 {tabs.map(({ id: tabId, label, icon: Icon }) => (
                   <button
                     key={tabId}
+                    id={`ticket-tab-${tabId}`}
                     type="button"
                     role="tab"
                     aria-selected={activeTab === tabId}
+                    aria-controls="ticket-analysis-panel"
+                    tabIndex={activeTab === tabId ? 0 : -1}
                     className={activeTab === tabId ? 'is-active' : ''}
                     onClick={() => setActiveTab(tabId)}
+                    onKeyDown={(event) => handleTabKeyDown(event, tabId)}
                   >
                     <Icon size={17} />
                     {label}
@@ -606,12 +671,13 @@ export default function SprintDetail() {
                 ))}
               </div>
 
-              <div className="analysis-content">
+              <div className="analysis-content" id="ticket-analysis-panel" role="tabpanel" aria-labelledby={`ticket-tab-${activeTab}`}>
                 {activeTab === 'requirements' && (
                   <RequirementsPanel ticket={selectedTicket} analysis={selectedAnalysis} onAnalyze={handleAnalyzeTicket} loading={analyzingTicketId === selectedTicket.id} readOnly={!canWrite} />
                 )}
                 {activeTab === 'code' && (
                   <CodeImpactPanel
+                    projectId={sprint.project_id}
                     ticketId={selectedTicket.id}
                     sprintId={selectedTicket.sprint_id}
                     summary={selectedTicket.summary}

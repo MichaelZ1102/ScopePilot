@@ -7,9 +7,12 @@ import base64
 import logging
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
+from urllib.parse import quote, urlsplit
 
 import httpx
+from ..config import settings
 from ..database import SqliteStore
 from ..encryption import decrypt, encrypt
 from scopepilot.codebase_scanner import index_source_text, scan_local_repository
@@ -62,6 +65,82 @@ class CodebaseService:
     def _without_secrets(source: dict) -> dict:
         return {key: value for key, value in source.items() if key != "access_token"}
 
+    @classmethod
+    def validate_source_config(cls, data: dict) -> None:
+        """Validate provider-specific repository settings before persistence or scan."""
+        provider = str(data.get("provider") or "github").lower()
+        repo_url = str(data.get("repo_url") or "").strip()
+        branch = str(data.get("default_branch") or "main").strip()
+        token = str(data.get("access_token") or "")
+
+        if provider in {"gitlab", "bitbucket"}:
+            raise CodebaseError(
+                f"{provider.title()} repository scanning is not supported yet."
+            )
+        if provider not in {"github", "local"}:
+            raise CodebaseError(f"Unsupported code source provider: {provider}")
+        if not branch or ".." in branch or not re.fullmatch(r"[A-Za-z0-9._/-]+", branch):
+            raise CodebaseError("Invalid default branch name")
+        if any(character in token for character in ("\r", "\n")):
+            raise CodebaseError("Access token must not contain line breaks")
+
+        if provider == "github":
+            parsed = urlsplit(repo_url)
+            path_parts = [part for part in parsed.path.split("/") if part]
+            try:
+                port = parsed.port
+            except ValueError as exc:
+                raise CodebaseError("GitHub repository URL contains an invalid port") from exc
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname not in {"github.com", "www.github.com"}
+                or port not in {None, 443}
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+                or len(path_parts) != 2
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", path_parts[0])
+                or not re.fullmatch(r"[A-Za-z0-9._-]+(?:\.git)?", path_parts[1])
+            ):
+                raise CodebaseError(
+                    "GitHub repository URL must use https://github.com/{owner}/{repository}"
+                )
+            return
+
+        if token:
+            raise CodebaseError("Local repositories do not use an access token")
+        cls._validated_local_path(repo_url)
+
+    @staticmethod
+    def _validated_local_path(repo_path: str) -> Path:
+        environment = settings.deployment_environment.strip().lower()
+        if environment in {"production", "staging", "hosted"}:
+            raise CodebaseError("Local repository scanning is disabled in hosted environments")
+
+        configured_roots = settings.local_code_scan_roots
+        if isinstance(configured_roots, str):
+            configured_roots = [configured_roots]
+        roots = []
+        for configured_root in configured_roots:
+            try:
+                roots.append(Path(configured_root).expanduser().resolve(strict=True))
+            except (OSError, RuntimeError):
+                logger.warning("Ignoring invalid local code scan root: %s", configured_root)
+        if not roots:
+            raise CodebaseError(
+                "Local repository scanning is disabled. Configure LOCAL_CODE_SCAN_ROOTS for development."
+            )
+        try:
+            candidate = Path(repo_path).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise CodebaseError("Local repository path does not exist") from exc
+        if not candidate.is_dir():
+            raise CodebaseError("Local repository path must be a directory")
+        if not any(candidate == root or candidate.is_relative_to(root) for root in roots):
+            raise CodebaseError("Local repository path is outside the configured scan roots")
+        return candidate
+
     # ── Code Source CRUD ──────────────────────────────────────────────────
 
     @classmethod
@@ -85,10 +164,11 @@ class CodebaseService:
         return await CodeSourceStore._persist_add(source)
 
     @classmethod
-    def list_sources(cls, workspace_id: int) -> list[dict]:
+    def list_sources(cls, workspace_id: int, project_id: Optional[int] = None) -> list[dict]:
         return [
             cls._without_secrets(s) for s in CodeSourceStore.list_by("workspace_id", workspace_id)
             if s["workspace_id"] == workspace_id
+            and (project_id is None or s.get("project_id") == project_id)
         ]
 
     @classmethod
@@ -125,6 +205,7 @@ class CodebaseService:
         await CodeSourceStore.update_fields(source_id, {"scan_status": "scanning"})
 
         try:
+            cls.validate_source_config(source)
             if source["provider"] == "github":
                 snapshot = await cls._scan_github(source)
             else:
@@ -204,9 +285,10 @@ class CodebaseService:
             headers["Authorization"] = f"Bearer {token}"
 
         branch = source.get("default_branch", "main")
+        branch_ref = quote(branch, safe="")
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            branch_url = f"https://api.github.com/repos/{owner}/{repo}/branches/{branch}"
+            branch_url = f"https://api.github.com/repos/{owner}/{repo}/branches/{branch_ref}"
             branch_resp = await client.get(branch_url, headers=headers)
             if branch_resp.status_code != 200:
                 raise CodebaseError(f"GitHub branch API error: {branch_resp.status_code} {branch_resp.text[:200]}")
@@ -217,7 +299,7 @@ class CodebaseService:
             lang_resp = await client.get(lang_url, headers=headers)
             lang_data = lang_resp.json() if lang_resp.status_code == 200 else {}
 
-            tree_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
+            tree_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch_ref}?recursive=1"
             tree_resp = await client.get(tree_url, headers=headers)
             if tree_resp.status_code != 200:
                 raise CodebaseError(f"GitHub tree API error: {tree_resp.status_code} {tree_resp.text[:200]}")
@@ -290,9 +372,10 @@ class CodebaseService:
     async def _scan_generic(cls, source: dict) -> dict:
         if source.get("provider") == "local":
             try:
+                local_path = cls._validated_local_path(source["repo_url"])
                 scanned = await asyncio.to_thread(
                     scan_local_repository,
-                    source["repo_url"],
+                    str(local_path),
                     source.get("default_branch"),
                 )
                 return {
@@ -301,16 +384,7 @@ class CodebaseService:
                 }
             except Exception as exc:
                 raise CodebaseError(f"Local repository scan failed: {exc}") from exc
-        return {
-            "code_source_id": source["id"],
-            "branch": source.get("default_branch", "main"),
-            "commit_sha": None,
-            "file_tree": {"files": [], "dirs": [], "note": f"Full scan not available for {source['provider']}."},
-            "language_breakdown": {},
-            "total_files": 0, "total_lines": 0,
-            "code_index": [],
-            "scanned_at": datetime.now(timezone.utc).isoformat(),
-        }
+        raise CodebaseError(f"Repository scanning is not supported for {source.get('provider', 'unknown')}")
 
     # ── Snapshots ─────────────────────────────────────────────────────────
 
